@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+venv/
+.env
+backend/.env
+backend/data/storage/*
+!backend/data/storage/.gitkeep
+node_modules/
+.next/
+out/
+frontend/.env
+.DS_Store
+Thumbs.db
