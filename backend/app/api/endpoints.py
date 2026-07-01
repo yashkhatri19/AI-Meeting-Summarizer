@@ -45,7 +45,7 @@ async def process_audio(file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-
+    # Endpoint for asking questions about the meeting transcript
 @router.post("/ask-question")
 async def ask_question_about_transcript(payload: QuestionRequest):
     try:
