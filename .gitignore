@@ -12,3 +12,4 @@ frontend/.env
 .DS_Store
 Thumbs.db
 .env.example
+.env.local
