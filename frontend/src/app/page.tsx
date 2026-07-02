@@ -8,7 +8,7 @@ import {
   History, Trash2, PlusCircle, Sparkles, 
   AudioLines, LogIn, Mail, Lock, Share2, Check, Chrome 
 } from "lucide-react";
-
+// Message interface for chat interactions
 interface Message {
   sender: "user" | "ai";
   text: string;
