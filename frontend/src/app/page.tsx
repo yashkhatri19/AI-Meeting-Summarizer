@@ -13,7 +13,7 @@ interface Message {
   sender: "user" | "ai";
   text: string;
 }
-
+// History item structure for local storage
 interface HistoryItem {
   id: string;
   fileName: string;
