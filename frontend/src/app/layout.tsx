@@ -6,7 +6,7 @@ export const metadata = {
   title: 'VoxBrief AI',
   description: 'Production Ready Identity Verification',
 }
-
+// Root layout for the entire application
 export default function RootLayout({
   children,
 }: {
