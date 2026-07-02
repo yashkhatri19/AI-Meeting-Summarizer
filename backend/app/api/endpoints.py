@@ -38,10 +38,10 @@ async def process_audio(file: UploadFile = File(...)):
             "transcript": transcript,
             "analysis": analysis
         }
-        
+    # Handle specific exceptions if needed    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
+    
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
