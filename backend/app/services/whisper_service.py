@@ -4,6 +4,7 @@ from pydub import AudioSegment
 from pydub.utils import which
 from groq import Groq
 import httpx
+import shutil
 
 # Tell pydub exactly where your newly downloaded ffmpeg executable is located
 AudioSegment.converter = r"C:\Users\Nihal\AppData\Local\ffmpegio\ffmpeg-downloader\ffmpeg\bin\ffmpeg.exe"
@@ -20,6 +21,13 @@ class WhisperService:
             http_client=self.custom_client
         )
 
+if shutil.which("ffmpeg"):
+    AudioSegment.converter = "ffmpeg"
+    AudioSegment.ffprobe = "ffprobe"
+else:
+    AudioSegment.converter = os.path.abspath("ffmpeg.exe")
+    AudioSegment.ffprobe = os.path.abspath("ffprobe.exe")
+    
     def transcribe_audio(self, input_file_path: str) -> str:
         from pathlib import Path
         
