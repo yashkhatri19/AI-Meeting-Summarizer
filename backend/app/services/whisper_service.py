@@ -27,7 +27,7 @@ class WhisperService:
         CURRENT_DIR = Path(__file__).parent.resolve()
         AudioSegment.converter = str(CURRENT_DIR / "ffmpeg.exe")
         AudioSegment.ffprobe = str(CURRENT_DIR / "ffprobe.exe")
-        
+
         compressed_audio_path = "temp_compressed_audio.mp3"
         # Check if the input file exists
         try:
@@ -46,7 +46,8 @@ class WhisperService:
             with open(compressed_audio_path, "rb") as file_to_send:
                 response = self.client.audio.transcriptions.create(
                     file=file_to_send,
-                    model="whisper-large-v3"
+                    model="whisper-large-v3",
+                    language="en"
                 )
             return response.text
 

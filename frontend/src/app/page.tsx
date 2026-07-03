@@ -334,11 +334,11 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Grid Layout Workspace */}
-      <main className="flex-1 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 p-4 gap-4 h-[calc(100vh-60px)] overflow-hidden">
+     {/* Isko badal kar strict grid aur viewport limits dein takia scroll bahar na aaye */}
+<main className="flex-1 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 p-4 gap-4 max-h-[calc(100vh-70px)] h-[calc(100vh-70px)] overflow-hidden w-full">
         
-        {/* Left Side: Sidebar Archive */}
-        <div className="md:col-span-1 bg-slate-900/10 border border-slate-800/60 rounded-2xl flex flex-col p-4 overflow-hidden">
+         {/* Change 2: Force the container to explicitly respect the full height layout limits */}
+<div className="md:col-span-1 bg-slate-900/10 border border-slate-800/60 rounded-2xl flex flex-col p-4 h-full min-h-0 overflow-hidden">
           <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-3 border-b border-slate-800/60 pb-2">
             <History className="h-3.5 w-3.5" /> Archive Logs
           </h3>
@@ -369,9 +369,10 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Center: Work Area */}
-        <div className="md:col-span-2 lg:col-span-3 flex flex-col gap-4 overflow-y-auto pr-0.5">
-          <div className="bg-slate-900/20 border-2 border-dashed border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center min-h-[140px] relative">
+        {/* Isko bilkul height lock karein aur scroll ko stop karein */}
+         <div className="md:col-span-2 lg:col-span-3 flex flex-col gap-4 h-full max-h-full overflow-hidden">
+          {/* Change 4: Added shrink-0 to prevent this box from changing size when text content expands below it */}
+            <div className="bg-slate-900/20 border-2 border-dashed border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center min-h-[140px] relative shrink-0">
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
             {!file ? (
               <div className="text-center flex flex-col items-center gap-2">
@@ -387,15 +388,18 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="flex justify-end">
+            {/* Change 5: Added shrink-0 to preserve structural spacing layout integrity */}
+                <div className="flex justify-end shrink-0">
             <button onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-semibold rounded-xl flex items-center gap-2 transition-all">
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>Process Stream <ArrowRight className="h-3.5 w-3.5" /></>}
             </button>
           </div>
 
           {/* Transcript Render Monitor */}
-          <div className="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-5 flex flex-col flex-1 min-h-[200px]">
-            <div className="flex justify-between items-center border-b border-slate-800/60 pb-2 mb-3">
+{/* Min-h hatakar flex-1 aur overflow-hidden lagayein taki text isi box ke andar rahe */}
+<div className="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-5 flex flex-col flex-1 h-full min-h-0 overflow-hidden">
+            {/* Change 7: Added shrink-0 so the header strip doesn't squish when text fills the area */}
+<div className="flex justify-between items-center border-b border-slate-800/60 pb-2 mb-3 shrink-0">
               <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Ingested Transcript Stream</h3>
               {transcript && (
                 <button onClick={handleShareDashboard} className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold border rounded-lg transition-all ${shareCopied ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-slate-900/80 border-slate-800 text-slate-400"}`}>
@@ -412,9 +416,10 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right Side: Chatbox Area */}
-        <div className="md:col-span-1 lg:col-span-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl flex flex-col h-[calc(100vh-95px)] overflow-hidden shadow-xl">
-          <div className="p-3 border-b border-slate-800/60 bg-slate-900/20"><h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cognitive Assistant</h3></div>
+      {/* Custom calc height hatakar isko full layout height (`h-full`) par lock karein */}
+<div className="md:col-span-1 lg:col-span-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl flex flex-col h-full max-h-full overflow-hidden shadow-xl">
+           {/* Change 9: Added shrink-0 to prevent text from crushing this title element */}
+              <div  className="p-3 border-b border-slate-800/60 bg-slate-900/20 shrink-0"></div>
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {messages.map((msg, index) => (
               <div key={index} className={`flex gap-2 max-w-[90%] ${msg.sender === "user" ? "ml-auto flex-row-reverse" : ""}`}>
@@ -425,7 +430,8 @@ export default function Dashboard() {
             <div ref={chatEndRef} />
           </div>
 
-          <form onSubmit={handleSendMessage} className="p-2 border-t border-slate-800/60 bg-slate-950/40 flex gap-2 items-center">
+            {/* Change 10: Added shrink-0 to keep the bottom input area visible at all times */}
+<form onSubmit={handleSendMessage} className="p-2 border-t border-slate-800/60 bg-slate-950/40 flex gap-2 items-center shrink-0">
             <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} disabled={!transcript || chatLoading} placeholder="Query agent..." className="flex-1 text-xs bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500" />
             <button type="submit" disabled={!chatInput.trim() || chatLoading || !transcript} className="p-2 bg-blue-600 text-white rounded-xl"><Send className="h-3 w-3" /></button>
           </form>
