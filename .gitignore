@@ -13,3 +13,19 @@ frontend/.env
 Thumbs.db
 .env
 .env.local
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/.env
+*.pyc
+
+# Node/Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
+
+# Local binaries
+backend/ffmpeg.exe
+backend/ffprobe.exe
+backend/ffplay.exe
