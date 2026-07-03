@@ -221,7 +221,7 @@ export default function Dashboard() {
     formData.append("file", file);
      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/upload`, formData, {
+      const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
