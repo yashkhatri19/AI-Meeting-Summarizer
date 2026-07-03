@@ -7,7 +7,10 @@ app = FastAPI(title="VoxBrief AI API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://ai-meeting-summarizer-h93x.onrender.com"],
+    allow_origins=["https://ai-meeting-summarizer-guru19.vercel.app",
+              "https://ai-meeting-summarizer-git-main-guru19.vercel.app",  # <--- Yeh naya URL bhi add kar diya
+               "http://localhost:3000"
+                   ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
