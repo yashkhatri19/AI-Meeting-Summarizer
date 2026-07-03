@@ -219,9 +219,9 @@ export default function Dashboard() {
     setError("");
     const formData = new FormData();
     formData.append("file", file);
-
+     const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     try {
-      const response = await axios.post("http://127.0.0.1:8000/api/process", formData, {
+      const response = await axios.post(`${API_BASE_URL}/api/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
@@ -267,9 +267,9 @@ export default function Dashboard() {
     setMessages(updatedMessagesWithUser);
     setChatInput("");
     setChatLoading(true);
-
+     const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     try {
-      const response = await axios.post("http://127.0.0.1:8000/api/ask-question", {
+      const response = await axios.post(`${API_BASE_URL}/api/ask-question`, {
         transcript: transcript,
         question: userQuestion
       });
