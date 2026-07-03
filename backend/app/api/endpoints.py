@@ -11,7 +11,7 @@ llm_service = LLMService()
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
 ALLOWED_CONTENT_TYPES = {"audio/", "video/mpeg", "video/mp4"}
 
-@router.post("/process")
+@router.post("/upload")
 async def process_audio(file: UploadFile = File(...)):
     file_ext = os.path.splitext(file.filename)[1].lower()
     
