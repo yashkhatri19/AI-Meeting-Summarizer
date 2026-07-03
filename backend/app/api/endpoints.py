@@ -1,50 +1,58 @@
 import os
 import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.services.whisper_service import WhisperService
 from app.services.llm_service import LLMService
 from app.schemas.meeting import QuestionRequest
+import google.generativeai as genai
 
 router = APIRouter()
-whisper_service = WhisperService()
 llm_service = LLMService()
 
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
-ALLOWED_CONTENT_TYPES = {"audio/", "video/mpeg", "video/mp4"}
+# API Key config jo aapne Render par set ki hai
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Dono routes handle karne ke liye (ताकि frontend ko /api/upload mile ya direct /upload, dono chalenge)
+ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
+
 @router.post("/upload")
 @router.post("/api/upload")
 async def process_audio(file: UploadFile = File(...)):
     file_ext = os.path.splitext(file.filename)[1].lower()
-    
-    is_valid_type = any(file.content_type.startswith(t) for t in ALLOWED_CONTENT_TYPES) or file.content_type in ALLOWED_CONTENT_TYPES
-    
-    if file_ext not in ALLOWED_EXTENSIONS and not is_valid_type:
+    if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Invalid audio or video format")
 
-    # PRODUCTION SAFE STORAGE: Render ke OS temporary location ko target karein
+    # Render safe temporary path
     temp_dir = "/tmp/voxbrief_storage"
     os.makedirs(temp_dir, exist_ok=True)
-    
     temp_file_path = os.path.join(temp_dir, file.filename)
     
     try:
-        # File stream ko save karne ka sabse fast aur secure tarika cloud par
+        # File save karein
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        transcript = whisper_service.transcribe_audio(temp_file_path)
-        analysis = llm_service.analyze_transcript(transcript)
+        # Heavy local Whisper ke bajay direct Gemini multimodal API use karein (Super Fast & Free)
+        print("Uploading file to Gemini Flash...")
+        audio_file = genai.upload_file(path=temp_file_path)
+        
+        print("Processing with Gemini...")
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # Ek hi shot mein transcription aur summary dono nikal jayegi
+        response = model.generate_content([
+            audio_file, 
+            "Please provide a highly accurate word-for-word transcript first, followed by a clean summary of this meeting."
+        ])
+        
+        full_output = response.text
         
         return {
             "status": "success",
-            "transcript": transcript,
-            "analysis": analysis
+            "transcript": full_output,
+            "analysis": "Processed successfully via Gemini Flash Free Tier."
         }
+        
     except Exception as e:
-        # Taki humein client-side console par poora details dikhe agar kuch crash ho
-        raise HTTPException(status_code=500, detail=f"Backend processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cloud Processing Error: {str(e)}")
     
     finally:
         if os.path.exists(temp_file_path):
@@ -54,12 +62,8 @@ async def process_audio(file: UploadFile = File(...)):
 async def ask_question_about_transcript(payload: QuestionRequest):
     try:
         if not payload.transcript.strip() or not payload.question.strip():
-            raise HTTPException(status_code=400, detail="Transcript and question cannot be empty")
-            
+            raise HTTPException(status_code=400, detail="Fields cannot be empty")
         answer = llm_service.ask_question(payload.transcript, payload.question)
-        return {
-            "status": "success",
-            "answer": answer
-        }
+        return {"status": "success", "answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
