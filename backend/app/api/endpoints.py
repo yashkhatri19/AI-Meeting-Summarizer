@@ -1,4 +1,5 @@
 import os
+import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.services.whisper_service import WhisperService
 from app.services.llm_service import LLMService
@@ -11,7 +12,9 @@ llm_service = LLMService()
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
 ALLOWED_CONTENT_TYPES = {"audio/", "video/mpeg", "video/mp4"}
 
+# Dono routes handle karne ke liye (ताकि frontend ko /api/upload mile ya direct /upload, dono chalenge)
 @router.post("/upload")
+@router.post("/api/upload")
 async def process_audio(file: UploadFile = File(...)):
     file_ext = os.path.splitext(file.filename)[1].lower()
     
@@ -20,15 +23,16 @@ async def process_audio(file: UploadFile = File(...)):
     if file_ext not in ALLOWED_EXTENSIONS and not is_valid_type:
         raise HTTPException(status_code=400, detail="Invalid audio or video format")
 
-    temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/storage"))
+    # PRODUCTION SAFE STORAGE: Render ke OS temporary location ko target karein
+    temp_dir = "/tmp/voxbrief_storage"
     os.makedirs(temp_dir, exist_ok=True)
     
     temp_file_path = os.path.join(temp_dir, file.filename)
     
     try:
-        with open(temp_file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        # File stream ko save karne ka sabse fast aur secure tarika cloud par
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
             
         transcript = whisper_service.transcribe_audio(temp_file_path)
         analysis = llm_service.analyze_transcript(transcript)
@@ -38,14 +42,14 @@ async def process_audio(file: UploadFile = File(...)):
             "transcript": transcript,
             "analysis": analysis
         }
-    # Handle specific exceptions if needed    
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Taki humein client-side console par poora details dikhe agar kuch crash ho
+        raise HTTPException(status_code=500, detail=f"Backend processing error: {str(e)}")
     
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-    # Endpoint for asking questions about the meeting transcript
+
 @router.post("/ask-question")
 async def ask_question_about_transcript(payload: QuestionRequest):
     try:
