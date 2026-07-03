@@ -21,8 +21,15 @@ class WhisperService:
         )
 
     def transcribe_audio(self, input_file_path: str) -> str:
-        compressed_audio_path = "temp_compressed_audio.mp3"
+        from pathlib import Path
         
+        # 1. ALWAYS SET PATHS FIRST BEFORE TRYING TO LOAD THE FILE
+        CURRENT_DIR = Path(__file__).parent.resolve()
+        AudioSegment.converter = str(CURRENT_DIR / "ffmpeg.exe")
+        AudioSegment.ffprobe = str(CURRENT_DIR / "ffprobe.exe")
+        
+        compressed_audio_path = "temp_compressed_audio.mp3"
+        # Check if the input file exists
         try:
             print("Compressing file to fit under Groq's 25MB limit...")
             # Load the video/audio file

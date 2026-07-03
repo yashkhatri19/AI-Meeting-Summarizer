@@ -22,20 +22,23 @@ class LLMService:
             f"Transcript:\n{transcript_text}"
         )
 
-        response = self.client.chat.completions.create(
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.1-8b-instant",
-            response_format={"type": "json_object"},
-            temperature=0.2
-        )
-
-        raw_content = response.choices[0].message.content
-        return json.loads(raw_content)
+        try:
+            response = self.client.chat.completions.create(
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.3-70b-versatile",  # Fixed: Valid production model supporting JSON mode
+                response_format={"type": "json_object"},
+                temperature=0.2
+            )
+            raw_content = response.choices[0].message.content
+            return json.loads(raw_content)
+        except Exception as e:
+            print(f"Error in analyze_transcript: {str(e)}")
+            # Fallback empty dictionary structure so the app doesn't completely crash
+            return {"summary": "Error parsing transcript.", "key_takeaways": [], "action_items": []}
     
     def ask_question(self, transcript_text: str, question: str) -> str:
-        # Upgraded Analytical Prompt Setup
         prompt = (
             "You are VoxBrief AI, an advanced cognitive meeting analyst helping a user with a meeting transcript.\n\n"
             f"Here is the context channel (Meeting Transcript):\n###\n{transcript_text}\n###\n\n"
@@ -49,12 +52,15 @@ class LLMService:
             f"Question: {question}"
         )
 
-        response = self.client.chat.completions.create(
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.1-8b-instant",
-            temperature=0.3
-        )
-
-        return response.choices[0].message.content
+        try:
+            response = self.client.chat.completions.create(
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.3-70b-versatile",  # Fixed: Instant lightning-fast chat model
+                temperature=0.3
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error in ask_question: {str(e)}")
+            return f"Backend Error processing your question: {str(e)}"
