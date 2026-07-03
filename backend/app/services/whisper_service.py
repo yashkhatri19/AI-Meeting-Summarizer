@@ -11,7 +11,7 @@ AudioSegment.converter = r"C:\Users\Nihal\AppData\Local\ffmpegio\ffmpeg-download
 AudioSegment.ffprobe   = r"C:\Users\Nihal\AppData\Local\ffmpegio\ffmpeg-downloader\ffmpeg\bin\ffprobe.exe"
 # Load variables from .env
 load_dotenv()
-
+# Tell pydub to use the ffmpeg executable from the specified path
 class WhisperService:
     def __init__(self):
         # Setup custom client with a 10-minute timeout for large files
@@ -27,7 +27,7 @@ if shutil.which("ffmpeg"):
 else:
     AudioSegment.converter = os.path.abspath("ffmpeg.exe")
     AudioSegment.ffprobe = os.path.abspath("ffprobe.exe")
-    
+
     def transcribe_audio(self, input_file_path: str) -> str:
         from pathlib import Path
         
