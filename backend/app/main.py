@@ -1,11 +1,10 @@
 import os
 import shutil
 import asyncio
-import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import google.generativeai as genai
+import httpx
 
 app = FastAPI()
 
@@ -17,93 +16,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-RAW_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-
-# Naye Auth Tokens ko back-end par set karne ka automatic system
-if RAW_KEY:
-    os.environ["GEMINI_API_KEY"] = RAW_KEY
-    genai.configure(api_key=RAW_KEY)
-    print("📢 API CONFIG: Dynamic Security Token Loaded Successfully.")
-else:
-    print("⚠️ API CONFIG: Token Missing In Environment Variables!")
+API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
+headers = {"authorization": API_KEY}
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "auth_mode": "unified_dynamic_bridge"}
+    return {"status": "online", "provider": "AssemblyAI Free Tier"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="AssemblyAI API Key is missing on Render!")
+
     temp_dir = "/tmp" if os.path.exists("/tmp") else "."
     temp_file_path = os.path.join(temp_dir, file.filename)
     
     with open(temp_file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    async def dynamic_ai_streamer():
+    async def assembly_ai_streamer():
         try:
-            yield "🔄 [Connection]: Establishing Secure Tunnel with Gemini...\n"
-            yield f"📂 [File Staged]: {file.filename}\n\n"
-            await asyncio.sleep(0.5)
+            yield "🔄 [Connection]: Connected to AssemblyAI Pipeline...\n"
+            yield f"📂 [File Staged]: {file.filename}\n"
+            await asyncio.sleep(0.2)
 
-            if not RAW_KEY:
-                yield "❌ [Error]: Missing GEMINI_API_KEY inside Render settings."
-                return
+            async with httpx.AsyncClient() as client:
+                # 1. Audio File ko Upload karna
+                yield "⚡ [Pipeline]: Uploading audio stream to secure repository...\n"
+                with open(temp_file_path, "rb") as f:
+                    upload_response = await client.post(
+                        "https://api.assemblyai.com/v2/upload",
+                        headers=headers,
+                        content=f,
+                        timeout=300.0
+                    )
+                
+                if upload_response.status_code != 200:
+                    yield f"❌ [Upload Error]: {upload_response.text}\n"
+                    return
+                
+                audio_url = upload_response.json()["upload_url"]
+                yield "🚀 [Pipeline]: Upload complete. Initializing AI transcription & summary...\n"
 
-            # Naye AQ. tokens ke liye direct REST pipeline bypass
-            yield "⚡ [Pipeline]: Processing speech structure via unified endpoint...\n"
-            
-            # File system node upload handler
-            audio_file_node = genai.upload_file(path=temp_file_path)
-            yield "✨ [Cognitive Stream]: Audio ingested, generating markdown summary...\n\n"
+                # 2. Transcription aur Summary request trigger karna
+                transcript_request = {
+                    "audio_url": audio_url,
+                    "summarization": True,
+                    "summary_model": "informative",
+                    "summary_type": "bullets"
+                }
+                
+                transcript_response = await client.post(
+                    "https://api.assemblyai.com/v2/transcript",
+                    json=transcript_request,
+                    headers=headers
+                )
+                
+                transcript_id = transcript_response.json()["id"]
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            prompt = (
-                "Provide an accurate text transcription of the provided audio file "
-                "and then output a detailed markdown summary with key action items."
-            )
-            
-            # Chunking stream handle
-            response = model.generate_content([audio_file_node, prompt], stream=True)
-            
-            yield "--- START OF SUMMARY ---\n\n"
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-                    await asyncio.sleep(0.02)
-            
-            # Cleanup storage node
-            try:
-                genai.delete_file(audio_file_node.name)
-            except:
-                pass
+                # 3. Polling (Check karna jab tak AI process na kar le)
+                while True:
+                    polling_response = await client.get(
+                        f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+                        headers=headers
+                    )
+                    status = polling_response.json()["status"]
+                    
+                    if status == "completed":
+                        yield "\n✨ --- AUDIO ANALYSIS COMPLETE ---\n\n"
+                        result_data = polling_response.json()
+                        
+                        yield "### 📝 Transcription Text:\n"
+                        yield f"{result_data.get('text', 'No transcription available.')}\n\n"
+                        yield "---"
+                        yield "### 🎯 AI Summary & Action Items:\n"
+                        yield f"{result_data.get('summary', 'No summary available.')}\n"
+                        break
+                    elif status == "failed":
+                        yield f"❌ [AI Processing Failed]: {polling_response.json().get('error', 'Unknown Error')}\n"
+                        break
+                    else:
+                        yield "⏳ [AI Thinking]: Analyzing speech nodes, extracting key actions...\n"
+                        await asyncio.sleep(3.0)
 
         except Exception as e:
-            # Agar fir bhi restriction aaye, toh ye backup raw HTTP call maarega
-            error_msg = str(e)
-            if "API key not valid" in error_msg or "400" in error_msg:
-                yield "⚠️ [Fallback Active]: Standard SDK rejected token. Retrying via Direct HTTP Channel...\n\n"
-                try:
-                    # Direct REST client bypass architecture
-                    async with httpx.AsyncClient() as client:
-                        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={RAW_KEY}"
-                        headers = {"Content-Type": "application/json"}
-                        payload = {
-                            "contents": [{"parts": [{"text": "Summarize the file accurately and give action items."}]}]
-                        }
-                        res = await client.post(url, json=payload, headers=headers, timeout=60.0)
-                        if res.status_code == 200:
-                            data = res.json()
-                            text_reply = data['candidates'][0]['content']['parts'][0]['text']
-                            yield text_reply
-                        else:
-                            yield f"❌ [Google Gateway Error]: {res.text}"
-                except Exception as fallback_err:
-                    yield f"❌ [Critical Failure]: Both SDK and HTTP Gateway rejected the key. Details: {str(fallback_err)}"
-            else:
-                yield f"\n\n❌ [Runtime Exception]: {error_msg}\n"
-        
+            yield f"\n❌ [Runtime Error]: {str(e)}\n"
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    return StreamingResponse(dynamic_ai_streamer(), media_type="text/plain")
+    return StreamingResponse(assembly_ai_streamer(), media_type="text/plain")
