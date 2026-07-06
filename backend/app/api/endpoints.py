@@ -51,7 +51,8 @@ async def process_audio(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cloud Processing Error: {str(e)}")
+            print("ASLI ERROR YAHAN HAI :", str(e))  # <--- Yeh line logs mein sab kuch sach ugalwa degi
+            raise HTTPException(status_code=500, detail=f"Cloud Processing Error: {str(e)}")
     
     finally:
         if os.path.exists(temp_file_path):
