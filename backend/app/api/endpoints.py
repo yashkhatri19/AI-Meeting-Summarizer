@@ -3,7 +3,7 @@ import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.services.llm_service import LLMService
 from app.schemas.meeting import QuestionRequest
-import google.generative_ai as genai
+import google.generativeai as genai
 
 router = APIRouter()
 llm_service = LLMService()
