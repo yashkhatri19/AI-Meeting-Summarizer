@@ -15,5 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .
 
 EXPOSE 8000
-
+git add .
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
