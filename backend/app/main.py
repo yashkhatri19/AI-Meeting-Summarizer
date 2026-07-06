@@ -21,7 +21,7 @@ headers = {"authorization": API_KEY}
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "provider": "AssemblyAI Free Tier"}
+    return {"status": "online", "provider": "AssemblyAI Free Tier Fixed"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
@@ -41,15 +41,18 @@ async def handle_upload(file: UploadFile = File(...)):
             await asyncio.sleep(0.2)
 
             async with httpx.AsyncClient() as client:
-                # 1. Audio File ko Upload karna
                 yield "⚡ [Pipeline]: Uploading audio stream to secure repository...\n"
+                
+                # FIX: File data ko pehle read karke bytes mein convert kar diya taaki async clash na ho
                 with open(temp_file_path, "rb") as f:
-                    upload_response = await client.post(
-                        "https://api.assemblyai.com/v2/upload",
-                        headers=headers,
-                        content=f,
-                        timeout=300.0
-                    )
+                    file_bytes = f.read()
+
+                upload_response = await client.post(
+                    "https://api.assemblyai.com/v2/upload",
+                    headers=headers,
+                    content=file_bytes,
+                    timeout=300.0
+                )
                 
                 if upload_response.status_code != 200:
                     yield f"❌ [Upload Error]: {upload_response.text}\n"
@@ -88,7 +91,7 @@ async def handle_upload(file: UploadFile = File(...)):
                         
                         yield "### 📝 Transcription Text:\n"
                         yield f"{result_data.get('text', 'No transcription available.')}\n\n"
-                        yield "---"
+                        yield "---\n"
                         yield "### 🎯 AI Summary & Action Items:\n"
                         yield f"{result_data.get('summary', 'No summary available.')}\n"
                         break
@@ -97,7 +100,7 @@ async def handle_upload(file: UploadFile = File(...)):
                         break
                     else:
                         yield "⏳ [AI Thinking]: Analyzing speech nodes, extracting key actions...\n"
-                        await asyncio.sleep(3.0)
+                        await asyncio.sleep(4.0)
 
         except Exception as e:
             yield f"\n❌ [Runtime Error]: {str(e)}\n"
