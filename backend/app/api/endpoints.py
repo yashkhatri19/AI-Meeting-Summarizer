@@ -3,7 +3,7 @@ import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.services.llm_service import LLMService
 from app.schemas.meeting import QuestionRequest
-import google.generativeai as genai
+import google.generative_ai as genai
 
 router = APIRouter()
 llm_service = LLMService()
@@ -14,7 +14,6 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
 
 @router.post("/upload")
-@router.post("/api/upload")
 async def process_audio(file: UploadFile = File(...)):
     file_ext = os.path.splitext(file.filename)[1].lower()
     if file_ext not in ALLOWED_EXTENSIONS:
