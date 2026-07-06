@@ -1,69 +1,64 @@
 import os
 import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.services.llm_service import LLMService
-from app.schemas.meeting import QuestionRequest
+from fastapi.responses import StreamingResponse
 import google.generativeai as genai
 
 router = APIRouter()
-llm_service = LLMService()
 
-# API Key config jo aapne Render par set ki hai
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".mp4", ".mpeg", ".opus"}
+# Gemini Config
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 @router.post("/upload")
 async def process_audio(file: UploadFile = File(...)):
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Invalid audio or video format")
-
-    # Render safe temporary path
-    temp_dir = "/tmp/voxbrief_storage"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_file_path = os.path.join(temp_dir, file.filename)
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API Key is not configured on the server.")
     
+    # 1. Temporary local file save karna (Gemini API ko path dene ke liye)
+    temp_file_path = f"/tmp/{file.filename}"
     try:
-        # File save karein
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
-        # Heavy local Whisper ke bajay direct Gemini multimodal API use karein (Super Fast & Free)
-        print("Uploading file to Gemini Flash...")
-        audio_file = genai.upload_file(path=temp_file_path)
         
-        print("Processing with Gemini...")
+        print(f"📦 File locally saved at: {temp_file_path}")
+
+        # 2. Direct Gemini API par file upload karna (No FFmpeg Needed!)
+        print("🚀 Uploading file directly to Gemini API...")
+        gemini_file = genai.upload_file(path=temp_file_path)
+        print(f"✅ Gemini upload success! File URI: {gemini_file.uri}")
+
+        # 3. Model initialized karna (Gemini 1.5 Flash video/audio dono handle karta hai)
         model = genai.GenerativeModel("gemini-1.5-flash")
         
-        # Ek hi shot mein transcription aur summary dono nikal jayegi
-        response = model.generate_content([
-            audio_file, 
-            "Please provide a highly accurate word-for-word transcript first, followed by a clean summary of this meeting."
-        ])
-        
-        full_output = response.text
-        
-        return {
-            "status": "success",
-            "transcript": full_output,
-            "analysis": "Processed successfully via Gemini Flash Free Tier."
-        }
-        
+        prompt = (
+            "You are an expert meeting assistant. Analyze the provided audio/video file carefully. "
+            "First, generate a comprehensive, well-structured transcript of the entire conversation. "
+            "Then, provide a detailed summary, highlighting key action items, important decisions, and next steps."
+        )
+
+        # 4. Response ko stream karna taaki UI par real-time text dikhe
+        async def response_generator():
+            try:
+                response_stream = model.generate_content([gemini_file, prompt], stream=True)
+                for chunk in response_stream:
+                    if chunk.text:
+                        yield chunk.text
+                
+                # Processing ke baad Gemini cloud se file delete karna (Clean up)
+                genai.delete_file(gemini_file.name)
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    
+            except Exception as stream_err:
+                print("🔴 Streaming Error:", str(stream_err))
+                yield f"\n[Streaming Error: {str(stream_err)}]"
+
+        return StreamingResponse(response_generator(), media_type="text/plain")
+
     except Exception as e:
-            print("ASLI ERROR YAHAN HAI :", str(e))  # <--- Yeh line logs mein sab kuch sach ugalwa degi
-            raise HTTPException(status_code=500, detail=f"Cloud Processing Error: {str(e)}")
-    
-    finally:
+        print("🔴 ASLI ERROR YAHAN HAI NEW METHOD MEIN:", str(e))
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-
-@router.post("/ask-question")
-async def ask_question_about_transcript(payload: QuestionRequest):
-    try:
-        if not payload.transcript.strip() or not payload.question.strip():
-            raise HTTPException(status_code=400, detail="Fields cannot be empty")
-        answer = llm_service.ask_question(payload.transcript, payload.question)
-        return {"status": "success", "answer": answer}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"New Method Processing Error: {str(e)}")
