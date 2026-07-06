@@ -9,14 +9,14 @@ RUN apt-get update && apt-get install -y \
 # Set the working directory in the container
 WORKDIR /app
 
-# 🛠️ FIX 1: Copy requirements from backend folder
-COPY backend/requirements.txt .
+# Since Render is already inside the backend folder, copy directly:
+COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 🛠️ FIX 2: Copy only the backend folder content into /app
-COPY backend/ .
+# Copy all files from the current directory (backend) into /app
+COPY . .
 
 # Expose the port FastAPI runs on
 EXPOSE 8000
