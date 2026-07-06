@@ -6,39 +6,37 @@ import google.generativeai as genai
 
 router = APIRouter()
 
-# Gemini Config
+# Server start hote hi check karega
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+print(f"📢 SERVER STATUS: GEMINI_API_KEY is {'CONFIGURED' if GEMINI_API_KEY else 'MISSING 🔴'}")
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 @router.post("/upload")
 async def process_audio(file: UploadFile = File(...)):
-    if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="Gemini API Key is not configured on the server.")
+    # Agar key nahi hai toh frontend ko 400 error do taaki pata chale
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=400, detail="Backend error: GEMINI_API_KEY is not set in Render Dashboard Environment Variables!")
     
-    # 1. Temporary local file save karna (Gemini API ko path dene ke liye)
-    temp_file_path = f"/tmp/{file.filename}"
+    temp_file_path = f"/tmp/meeting_{file.filename}"
     try:
+        # File save block
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        print(f"📦 File locally saved at: {temp_file_path}")
+        if not os.path.exists(temp_file_path) or os.path.getsize(temp_file_path) == 0:
+            raise HTTPException(status_code=500, detail="Failed to write file to server storage.")
 
-        # 2. Direct Gemini API par file upload karna (No FFmpeg Needed!)
-        print("🚀 Uploading file directly to Gemini API...")
-        gemini_file = genai.upload_file(path=temp_file_path)
-        print(f"✅ Gemini upload success! File URI: {gemini_file.uri}")
+        # Upload to Gemini
+        try:
+            gemini_file = genai.upload_file(path=temp_file_path)
+        except Exception as upload_err:
+            raise HTTPException(status_code=500, detail=f"Google API Upload Failed: {str(upload_err)}")
 
-        # 3. Model initialized karna (Gemini 1.5 Flash video/audio dono handle karta hai)
         model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        prompt = (
-            "You are an expert meeting assistant. Analyze the provided audio/video file carefully. "
-            "First, generate a comprehensive, well-structured transcript of the entire conversation. "
-            "Then, provide a detailed summary, highlighting key action items, important decisions, and next steps."
-        )
+        prompt = "You are an expert meeting assistant. Provide a detailed summary and actionable items from this file."
 
-        # 4. Response ko stream karna taaki UI par real-time text dikhe
         async def response_generator():
             try:
                 response_stream = model.generate_content([gemini_file, prompt], stream=True)
@@ -46,19 +44,19 @@ async def process_audio(file: UploadFile = File(...)):
                     if chunk.text:
                         yield chunk.text
                 
-                # Processing ke baad Gemini cloud se file delete karna (Clean up)
-                genai.delete_file(gemini_file.name)
+                # Cleanup
+                try:
+                    genai.delete_file(gemini_file.name)
+                except:
+                    pass
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
-                    
             except Exception as stream_err:
-                print("🔴 Streaming Error:", str(stream_err))
-                yield f"\n[Streaming Error: {str(stream_err)}]"
+                yield f"\n[Stream Error: {str(stream_err)}]"
 
         return StreamingResponse(response_generator(), media_type="text/plain")
 
     except Exception as e:
-        print("🔴 ASLI ERROR YAHAN HAI NEW METHOD MEIN:", str(e))
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"New Method Processing Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server Exception: {str(e)}")
