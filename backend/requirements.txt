@@ -21,3 +21,4 @@ pydub==0.25.1
 google-generativeai
 tzdata==2026.2
 uvicorn==0.30.0
+ffmpeg-python-binary
