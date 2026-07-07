@@ -22,4 +22,3 @@ google-generativeai
 tzdata==2026.2
 uvicorn==0.30.0
 pydub
-pyaudioop-builtins
