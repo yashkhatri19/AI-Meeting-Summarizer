@@ -1,6 +1,5 @@
 import os
 import httpx
-import subprocess
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -23,46 +22,47 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "OS Native FFmpeg Compressor"}
+    return {"status": "online", "mode": "Pure Form-Data Validation Core"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
         return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
 
-    temp_video_path = f"/tmp/{file.filename}"
-    # Creating a guaranteed compressed lightweight mp3 path
-    temp_audio_path = f"/tmp/shrunk_{os.path.splitext(file.filename)[0]}.mp3"
+    temp_file_path = f"/tmp/{file.filename}"
     
-    # Save incoming massive video file in chunks safely
-    with open(temp_video_path, "wb") as buffer:
-        while chunk := await file.read(1024 * 1024):
+    # Save the file into local server temp directory safely
+    with open(temp_file_path, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):  # 1MB buffering block
             buffer.write(chunk)
 
-    async def compression_and_stream_pipeline():
+    async def pure_stream_pipeline():
         try:
-            # 1. OS-Level Heavy Compression: Drops 100MB video down to ~3MB audio natively
-            # This completely bypasses 'Request Entity Too Large' 25MB limit of Groq
-            compress_cmd = f"ffmpeg -i '{temp_video_path}' -vn -ar 16000 -ac 1 -b:a 32k -y '{temp_audio_path}'"
-            subprocess.run(compress_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-            # Verification checkpoint
-            if os.path.exists(temp_audio_path) and os.path.getsize(temp_audio_path) > 0:
-                active_upload_path = temp_audio_path
-                content_type_flag = "audio/mp3"
+            # Set high timeout for large multi-part requests
+            timeout_setting = httpx.Timeout(None, connect=90.0)
+            
+            # Explicitly force clean standard content types to bypass Groq format checker strictness
+            filename_lower = file.filename.lower()
+            if filename_lower.endswith(".mp4"):
+                mime_type = "video/mp4"
+            elif filename_lower.endswith((".mp3", ".mpeg", ".mpga")):
+                mime_type = "audio/mpeg"
+            elif filename_lower.endswith(".m4a"):
+                mime_type = "audio/mp4"
+            elif filename_lower.endswith(".wav"):
+                mime_type = "audio/wav"
+            elif filename_lower.endswith(".webm"):
+                mime_type = "video/webm"
             else:
-                # Fallback to avoid complete breaking if system layer lags
-                active_upload_path = temp_video_path
-                content_type_flag = "video/mp4"
+                mime_type = "video/mp4"  # Safe global fallback boundary
 
-            # 2. Fire Request to Whisper with No Timeout constraints
-            timeout_setting = httpx.Timeout(None, connect=120.0)
             async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                with open(active_upload_path, "rb") as audio_file:
+                # 1. Fire strict multipart structure request
+                with open(temp_file_path, "rb") as media_file:
                     whisper_response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (os.path.basename(active_upload_path), audio_file, content_type_flag)},
+                        files={"file": (file.filename, media_file, mime_type)},
                         data={"model": "whisper-large-v3"}
                     )
                 
@@ -70,17 +70,17 @@ async def handle_upload(file: UploadFile = File(...)):
                 raw_text = whisper_data.get("text", "")
 
                 if not raw_text:
-                    api_error = whisper_data.get("error", {}).get("message", "Payload structure execution failed.")
-                    yield f"Error from Groq API: {api_error}. File size was: {os.path.getsize(active_upload_path) // (1024*1024)}MB"
+                    api_error = whisper_data.get("error", {}).get("message", "Payload structure verification failed on Groq side.")
+                    yield f"Error from Groq API: {api_error}"
                     return
 
-                # 3. Translate directly into professional English
+                # 2. Strict Academic Translation to English
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input language is Hindi or Hinglish, convert it entirely to fluent English. Output ONLY the final clean English text. Do not include notes, comments, or preamble."
+                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input language is Hindi or Hinglish, convert it entirely to fluent English. Output ONLY the final clean English text. Do not include notes, logs, or preamble statements."
                         },
                         {"role": "user", "content": raw_text}
                     ],
@@ -103,14 +103,12 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Server Critical Process Error: {str(e)}"
+            yield f"Server Pipeline Error: {str(e)}"
         finally:
-            # Complete cleanup of cache files
-            for path in [temp_video_path, temp_audio_path]:
-                if os.path.exists(path):
-                    os.remove(path)
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
-    return StreamingResponse(compression_and_stream_pipeline(), media_type="text/plain")
+    return StreamingResponse(pure_stream_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
