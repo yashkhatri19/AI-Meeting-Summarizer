@@ -1,9 +1,12 @@
 import os
 import shutil
 import asyncio
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydub import AudioSegment
+from groq import Groq
 import httpx
 
 app = FastAPI()
@@ -16,141 +19,141 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ASSEMBLY_KEY = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
-GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
-
-# Global Runtime Store taaki chatbot dynamic content read kar sake
+# Global Runtime Store chatbot query validation ke liye
 GLOBAL_CONTEXT = {
     "latest_transcript": "No lecture content loaded yet. Please upload a video file."
 }
 
-async def groq_llm_layer(system_prompt: str, user_content: str) -> str:
-    """Ultra-fast Groq Llama-3 Cloud engine to process transcription and chatbot queries"""
-    if not GROQ_KEY:
-        return "Error: GROQ_API_KEY missing in Render environment variables."
-    
-    try:
-        async with httpx.AsyncClient() as client:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "llama-3.1-8b-instant",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
+# FFmpeg Paths Initialization
+CURRENT_DIR = Path(__file__).parent.resolve()
+if shutil.which("ffmpeg"):
+    AudioSegment.converter = "ffmpeg"
+    AudioSegment.ffprobe = "ffprobe"
+else:
+    AudioSegment.converter = str(CURRENT_DIR / "ffmpeg.exe")
+    AudioSegment.ffprobe = str(CURRENT_DIR / "ffprobe.exe")
+
+
+class WhisperService:
+    def __init__(self):
+        self.custom_client = httpx.Client(timeout=600.0)
+        self.groq_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not self.groq_key:
+            print("WARNING: GROQ_API_KEY missing from system environment variables!")
+        self.client = Groq(
+            api_key=self.groq_key, 
+            http_client=self.custom_client
+        )
+
+    def transcribe_audio(self, input_file_path: str) -> str:
+        compressed_audio_path = "temp_compressed_audio.mp3"
+        try:
+            print("Compressing file to fit under Groq's 25MB limit...")
+            audio = AudioSegment.from_file(input_file_path)
+            audio.export(compressed_audio_path, format="mp3", bitrate="64k")
+            print("Compression complete. Uploading to Groq Whisper Core...")
+
+            with open(compressed_audio_path, "rb") as file_to_send:
+                response = self.client.audio.transcriptions.create(
+                    file=file_to_send,
+                    model="whisper-large-v3"
+                )
+            return response.text
+        except Exception as e:
+            print(f"Error inside WhisperService: {str(e)}")
+            raise e
+        finally:
+            if os.path.exists(compressed_audio_path):
+                os.remove(compressed_audio_path)
+
+    def translate_and_clean_text(self, raw_text: str) -> str:
+        """Forces the Hindi transcription to convert into perfect professional English prose"""
+        try:
+            chat_completion = self.client.chat.completions.create(
+                model="llama-3.1-8b-instant",  # Updated & highly active supported version
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert technical translator. Translate the following lecture text completely into clear, clean, grammatically perfect English. Maintain formatting like markdown headings if needed. Output ONLY the English translation."
+                    },
+                    {
+                        "role": "user",
+                        "content": raw_text
+                    }
                 ],
-                "temperature": 0.2
-            }
-            response = await client.post(url, json=payload, headers=headers, timeout=30.0)
-            if response.status_code == 200:
-                return response.json()["choices"][0]["message"]["content"].strip()
-            return f"LLM Gateway Error: {response.text}"
-    except Exception as e:
-        return f"Translation/LLM Layer Crash: {str(e)}"
+                temperature=0.2
+            )
+            return chat_completion.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Translation Layer Exception: {str(e)}")
+            return raw_text # Fallback to original transcript if chat engine times out
+
+    def execute_chat_query(self, user_query: str, context: str) -> str:
+        """Executes targeted question answering over the current video's English context"""
+        try:
+            chat_completion = self.client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a classroom assistant. Answer the user's questions based on this lecture text:\n\n{context}\n\nKeep the answer short, clear, and direct."
+                    },
+                    {
+                        "role": "user",
+                        "content": user_query
+                    }
+                ],
+                temperature=0.3
+            )
+            return chat_completion.choices[0].message.content.strip()
+        except Exception as e:
+            return f"Chat Logic Exception: {str(e)}"
+
+
+# Instantiate service
+whisper_engine = WhisperService()
 
 @app.get("/")
-def read_root():
-    return {"status": "online", "engine": "AssemblyAI + Groq Dual Pipeline"}
+def check_status():
+    return {"status": "online", "pipeline": "Whisper-v3 + Llama3.1 Realtime Ingestion"}
+
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
-    if not ASSEMBLY_KEY:
-        raise HTTPException(status_code=500, detail="AssemblyAI API Key missing")
-
-    temp_dir = "/tmp" if os.path.exists("/tmp") else "."
-    temp_file_path = os.path.join(temp_dir, file.filename)
+    temp_file_path = os.path.join("/tmp" if os.path.exists("/tmp") else ".", file.filename)
     
     with open(temp_file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    async def core_processing_streamer():
+    async def execution_streamer():
         try:
-            async with httpx.AsyncClient() as client:
-                with open(temp_file_path, "rb") as f:
-                    file_bytes = f.read()
-
-                # 1. File Upload to AssemblyAI
-                upload_response = await client.post(
-                    "https://api.assemblyai.com/v2/upload",
-                    headers={"authorization": ASSEMBLY_KEY},
-                    content=file_bytes,
-                    timeout=300.0
-                )
+            # Step 1: Transcribe using locally wrapped Whisper engine
+            raw_hindi_text = whisper_engine.transcribe_audio(temp_file_path)
+            
+            if raw_hindi_text:
+                # Step 2: Pass text to Llama 3.1 for English transformation
+                english_translated_prose = whisper_engine.translate_and_clean_text(raw_hindi_text)
                 
-                if upload_response.status_code != 200:
-                    yield "Error: Audio file upload rejected."
-                    return
+                # Save to memory context for chat engine validation
+                GLOBAL_CONTEXT["latest_transcript"] = english_translated_prose
+                yield english_translated_prose
+            else:
+                yield "No spoken dialogue tracks detected in the media stream."
                 
-                audio_url = upload_response.json()["upload_url"]
-
-                # 2. Triggering Transcription
-                transcript_request = {"audio_url": audio_url, "language_detection": True}
-                transcript_response = await client.post(
-                    "https://api.assemblyai.com/v2/transcript",
-                    json=transcript_request,
-                    headers={"authorization": ASSEMBLY_KEY}
-                )
-                transcript_id = transcript_response.json()["id"]
-
-                # 3. Polling quietly
-                raw_hindi_text = ""
-                while True:
-                    polling_response = await client.get(
-                        f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
-                        headers={"authorization": ASSEMBLY_KEY}
-                    )
-                    result_data = polling_response.json()
-                    status = result_data["status"]
-                    
-                    if status == "completed":
-                        raw_hindi_text = result_data.get('text', '')
-                        break
-                    elif status == "failed":
-                        yield "AI Processing Failed on Speech Tier."
-                        return
-                    else:
-                        yield ""  # Invisible Heartbeat packet
-                        await asyncio.sleep(2.0)
-
-                # 4. Ultimate English Translation & Restructuring via Groq LLM
-                if raw_hindi_text:
-                    system_instruction = (
-                        "You are an expert educational translator. Translate the following lecture transcript "
-                        "into clean, grammatically perfect English prose. Maintain the technical depth of the topic "
-                        "(like programming loops, HTML tags, etc.). Output ONLY the translated English text. "
-                        "Do not include notes like 'Here is the translation:' or introductory remarks."
-                    )
-                    translated_english = await groq_llm_layer(system_instruction, raw_hindi_text)
-                    
-                    # Store globally for chatbot query execution
-                    GLOBAL_CONTEXT["latest_transcript"] = translated_english
-                    yield translated_english
-                else:
-                    yield "No audio nodes detected in the submitted file."
-
         except Exception as e:
-            yield f"Pipeline Core Error: {str(e)}"
+            yield f"Pipeline Error: {str(e)}"
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    return StreamingResponse(core_processing_streamer(), media_type="text/plain")
+    return StreamingResponse(execution_streamer(), media_type="text/plain")
+
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
-    """Handles right-side chat queries intelligently using the active video transcript context"""
+    """Handles right side chatbot node streams dynamically without crashing"""
     user_query = payload.get("query", "")
-    context = GLOBAL_CONTEXT["latest_transcript"]
+    active_context = GLOBAL_CONTEXT["latest_transcript"]
     
-    system_instruction = (
-        f"You are a helpful AI classroom teaching assistant. Answer the user's questions strictly based on the "
-        f"following translated lecture context provided below.\n\nContext:\n{context}\n\n"
-        f"If the answer is not present in the context, use logical educational inference about the core topic "
-        f"discussed to provide a perfect guiding answer. Keep the answer brief and professional."
-    )
-    
-    reply = await groq_llm_layer(system_instruction, user_query)
-    return {"reply": reply}
+    reply_output = whisper_engine.execute_chat_query(user_query, active_context)
+    return {"reply": reply_output}
