@@ -1,5 +1,6 @@
 import os
 import httpx
+import math
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -22,56 +23,61 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Pure Form-Data Validation Core"}
+    return {"status": "online", "mode": "100MB Chunk Splitting Core"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
-        return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
+        return StreamingResponse(iter(["Error: GROQ_API_KEY missing on Render."]), media_type="text/plain")
 
     temp_file_path = f"/tmp/{file.filename}"
     
-    # Save the file into local server temp directory safely
+    # Save the huge file locally in chunks to avoid memory crash
     with open(temp_file_path, "wb") as buffer:
-        while chunk := await file.read(1024 * 1024):  # 1MB buffering block
+        while chunk := await file.read(1024 * 1024):
             buffer.write(chunk)
 
-    async def pure_stream_pipeline():
+    async def chunked_upload_pipeline():
         try:
-            # Set high timeout for large multi-part requests
-            timeout_setting = httpx.Timeout(None, connect=90.0)
+            file_size = os.path.getsize(temp_file_path)
+            # Groq's max limit is 25MB (24 * 1024 * 1024 bytes for safety buffer)
+            max_chunk_size = 24 * 1024 * 1024 
             
-            # Explicitly force clean standard content types to bypass Groq format checker strictness
-            filename_lower = file.filename.lower()
-            if filename_lower.endswith(".mp4"):
-                mime_type = "video/mp4"
-            elif filename_lower.endswith((".mp3", ".mpeg", ".mpga")):
-                mime_type = "audio/mpeg"
-            elif filename_lower.endswith(".m4a"):
-                mime_type = "audio/mp4"
-            elif filename_lower.endswith(".wav"):
-                mime_type = "audio/wav"
-            elif filename_lower.endswith(".webm"):
-                mime_type = "video/webm"
-            else:
-                mime_type = "video/mp4"  # Safe global fallback boundary
+            timeout_setting = httpx.Timeout(None, connect=120.0)
+            full_raw_text = ""
 
             async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                # 1. Fire strict multipart structure request
-                with open(temp_file_path, "rb") as media_file:
-                    whisper_response = await client.post(
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (file.filename, media_file, mime_type)},
-                        data={"model": "whisper-large-v3"}
-                    )
-                
-                whisper_data = whisper_response.json()
-                raw_text = whisper_data.get("text", "")
+                # If file is smaller than 24MB, send it directly
+                if file_size <= max_chunk_size:
+                    with open(temp_file_path, "rb") as media_file:
+                        whisper_response = await client.post(
+                            "https://api.groq.com/openai/v1/audio/transcriptions",
+                            headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                            files={"file": (file.filename, media_file, "video/mp4")},
+                            data={"model": "whisper-large-v3"}
+                        )
+                    full_raw_text = whisper_response.json().get("text", "")
+                else:
+                    # Badi file handling: Split binary file into 24MB sequential blocks
+                    total_chunks = math.ceil(file_size / max_chunk_size)
+                    with open(temp_file_path, "rb") as master_file:
+                        for i in range(total_chunks):
+                            chunk_data = master_file.read(max_chunk_size)
+                            chunk_filename = f"part_{i}_{file.filename}"
+                            
+                            whisper_response = await client.post(
+                                "https://api.groq.com/openai/v1/audio/transcriptions",
+                                headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                                files={"file": (chunk_filename, chunk_data, "video/mp4")},
+                                data={"model": "whisper-large-v3"}
+                            )
+                            
+                            chunk_text = whisper_response.json().get("text", "")
+                            if chunk_text:
+                                full_raw_text += " " + chunk_text
 
-                if not raw_text:
-                    api_error = whisper_data.get("error", {}).get("message", "Payload structure verification failed on Groq side.")
-                    yield f"Error from Groq API: {api_error}"
+                if not full_raw_text.strip():
+                    yield "Error: Groq API could not extract text from any file block."
                     return
 
                 # 2. Strict Academic Translation to English
@@ -80,9 +86,9 @@ async def handle_upload(file: UploadFile = File(...)):
                     "messages": [
                         {
                             "role": "system",
-                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input language is Hindi or Hinglish, convert it entirely to fluent English. Output ONLY the final clean English text. Do not include notes, logs, or preamble statements."
+                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input language is Hindi or Hinglish, convert it entirely to fluent English. Output ONLY the final clean English text. Do not include notes or preamble statements."
                         },
-                        {"role": "user", "content": raw_text}
+                        {"role": "user", "content": full_raw_text.strip()}
                     ],
                     "temperature": 0.1
                 }
@@ -103,12 +109,12 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Server Pipeline Error: {str(e)}"
+            yield f"Server Pipeline Processing Error: {str(e)}"
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    return StreamingResponse(pure_stream_pipeline(), media_type="text/plain")
+    return StreamingResponse(chunked_upload_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
