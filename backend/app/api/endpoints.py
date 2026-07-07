@@ -22,22 +22,21 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Direct Binary Ingestion Core"}
+    return {"status": "online", "mode": "Pure Fast API Engine"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
-        return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
+        return StreamingResponse(iter(["Error: GROQ_API_KEY missing on Render."]), media_type="text/plain")
 
-    # Direct raw binary file save in local memory
     temp_file_path = f"/tmp/{file.filename}"
     with open(temp_file_path, "wb") as buffer:
         buffer.write(await file.read())
 
-    async def native_groq_pipeline():
+    async def streaming_pipeline():
         try:
-            # 1. Direct Multipart upload for Whisper (Handles MP4 natively via API boundary)
             async with httpx.AsyncClient() as client:
+                # 1. Direct Whisper Transcription
                 with open(temp_file_path, "rb") as audio_file:
                     whisper_response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -51,17 +50,16 @@ async def handle_upload(file: UploadFile = File(...)):
                 raw_text = whisper_data.get("text", "")
 
                 if not raw_text:
-                    # Log internal response if something goes wrong to identify API rejections
-                    yield f"Error from Groq API: {whisper_data.get('error', {}).get('message', 'Could not decode file content.')}"
+                    yield "Error: Could not extract speech tracks from file."
                     return
 
-                # 2. Perfect English Translation Node via Llama 3.1
+                # 2. Translate Hindi to English (Strict Instruction Layer)
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are an expert academic translator. Translate the given text completely into fluent, professional English prose. Do not include notes, preamble, or explanations. Return ONLY the final translated English text."
+                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input is in Hindi, translate it to English. Output ONLY the final clean English text. Do not include notes or preamble."
                         },
                         {"role": "user", "content": raw_text}
                     ],
@@ -85,20 +83,17 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Server Pipeline Exception: {str(e)}"
+            yield f"Server Pipeline Error: {str(e)}"
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    return StreamingResponse(native_groq_pipeline(), media_type="text/plain")
+    return StreamingResponse(streaming_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
     user_query = payload.get("query", "")
-    active_lecture_text = GLOBAL_CONTEXT["latest_transcript"]
-
-    if not GROQ_KEY:
-        return {"reply": "Groq Key configuration missing."}
+    active_context = GLOBAL_CONTEXT["latest_transcript"]
 
     try:
         chat_payload = {
@@ -106,7 +101,7 @@ async def chat_agent(payload: dict = Body(...)):
             "messages": [
                 {
                     "role": "system",
-                    "content": f"You are a helpful classroom AI assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript context:\n\n{active_lecture_text}"
+                    "content": f"You are an expert classroom teaching assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript:\n\n{active_context}"
                 },
                 {"role": "user", "content": user_query}
             ],
@@ -126,4 +121,4 @@ async def chat_agent(payload: dict = Body(...)):
             chat_data = chat_response.json()
             return {"reply": chat_data["choices"][0]["message"]["content"].strip()}
     except Exception as e:
-        return {"reply": f"Chat tracking error: {str(e)}"}
+        return {"reply": f"Chat failed: {str(e)}"}
