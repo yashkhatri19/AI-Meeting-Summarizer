@@ -17,8 +17,5 @@ python-multipart==0.0.9
 sniffio==1.3.1
 starlette==0.38.6
 typing_extensions==4.15.0
-pydub==0.25.1
-google-generativeai
 tzdata==2026.2
 uvicorn==0.30.0
-pydub
