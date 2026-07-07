@@ -3,6 +3,7 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from moviepy.editor import VideoFileClip
 
 app = FastAPI()
 
@@ -22,26 +23,38 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Pure HTTPX Streaming Core"}
+    return {"status": "online", "mode": "MoviePy Audio Extractor Native"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
         return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
 
-    temp_file_path = f"/tmp/{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
+    temp_video_path = f"/tmp/{file.filename}"
+    temp_audio_path = f"/tmp/converted_{os.path.splitext(file.filename)[0]}.mp3"
+    
+    # Save incoming file
+    with open(temp_video_path, "wb") as buffer:
         buffer.write(await file.read())
 
     async def native_api_streamer():
         try:
-            # 1. Whisper Transcription via Direct HTTP Post Request
+            # Native Audio Extraction from Video (No pydub legacy conflict)
+            if file.filename.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
+                clip = VideoFileClip(temp_video_path)
+                clip.audio.write_audiofile(temp_audio_path, logger=None)
+                clip.close()
+                active_upload_path = temp_audio_path
+            else:
+                active_upload_path = temp_video_path
+
+            # 1. Whisper Transcription Layer via Direct HTTP Request
             async with httpx.AsyncClient() as client:
-                with open(temp_file_path, "rb") as audio_file:
+                with open(active_upload_path, "rb") as audio_file:
                     whisper_response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (file.filename, audio_file)},
+                        files={"file": (os.path.basename(active_upload_path), audio_file)},
                         data={"model": "whisper-large-v3"},
                         timeout=60.0
                     )
@@ -53,7 +66,7 @@ async def handle_upload(file: UploadFile = File(...)):
                     yield "Error: Could not extract speech tracks from file via Groq API."
                     return
 
-                # 2. Translation Node via Direct Chat Completion Request
+                # 2. English Translation Node via Llama 3.1
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
@@ -85,8 +98,10 @@ async def handle_upload(file: UploadFile = File(...)):
         except Exception as e:
             yield f"Pipeline Core Exception: {str(e)}"
         finally:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            # Cleanup temporary streams
+            for path in [temp_video_path, temp_audio_path]:
+                if os.path.exists(path):
+                    os.remove(path)
 
     return StreamingResponse(native_api_streamer(), media_type="text/plain")
 
@@ -108,7 +123,7 @@ async def chat_agent(payload: dict = Body(...)):
                 },
                 {"role": "user", "content": user_query}
             ],
-            temperature: 0.3
+            "temperature": 0.3
         }
 
         async with httpx.AsyncClient() as client:
