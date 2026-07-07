@@ -3,7 +3,6 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from moviepy.editor import VideoFileClip
 
 app = FastAPI()
 
@@ -23,56 +22,46 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "MoviePy Audio Extractor Native"}
+    return {"status": "online", "mode": "Direct Binary Ingestion Core"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
         return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
 
-    temp_video_path = f"/tmp/{file.filename}"
-    temp_audio_path = f"/tmp/converted_{os.path.splitext(file.filename)[0]}.mp3"
-    
-    # Save incoming file
-    with open(temp_video_path, "wb") as buffer:
+    # Direct raw binary file save in local memory
+    temp_file_path = f"/tmp/{file.filename}"
+    with open(temp_file_path, "wb") as buffer:
         buffer.write(await file.read())
 
-    async def native_api_streamer():
+    async def native_groq_pipeline():
         try:
-            # Native Audio Extraction from Video (No pydub legacy conflict)
-            if file.filename.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
-                clip = VideoFileClip(temp_video_path)
-                clip.audio.write_audiofile(temp_audio_path, logger=None)
-                clip.close()
-                active_upload_path = temp_audio_path
-            else:
-                active_upload_path = temp_video_path
-
-            # 1. Whisper Transcription Layer via Direct HTTP Request
+            # 1. Direct Multipart upload for Whisper (Handles MP4 natively via API boundary)
             async with httpx.AsyncClient() as client:
-                with open(active_upload_path, "rb") as audio_file:
+                with open(temp_file_path, "rb") as audio_file:
                     whisper_response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (os.path.basename(active_upload_path), audio_file)},
+                        files={"file": (file.filename, audio_file, file.content_type)},
                         data={"model": "whisper-large-v3"},
-                        timeout=60.0
+                        timeout=90.0
                     )
                 
                 whisper_data = whisper_response.json()
                 raw_text = whisper_data.get("text", "")
 
                 if not raw_text:
-                    yield "Error: Could not extract speech tracks from file via Groq API."
+                    # Log internal response if something goes wrong to identify API rejections
+                    yield f"Error from Groq API: {whisper_data.get('error', {}).get('message', 'Could not decode file content.')}"
                     return
 
-                # 2. English Translation Node via Llama 3.1
+                # 2. Perfect English Translation Node via Llama 3.1
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are an expert academic translator. Translate the given text completely into fluent, professional English prose. Do not include notes or explanations. Return ONLY the English text."
+                            "content": "You are an expert academic translator. Translate the given text completely into fluent, professional English prose. Do not include notes, preamble, or explanations. Return ONLY the final translated English text."
                         },
                         {"role": "user", "content": raw_text}
                     ],
@@ -86,7 +75,7 @@ async def handle_upload(file: UploadFile = File(...)):
                         "Content-Type": "application/json"
                     },
                     json=translation_payload,
-                    timeout=30.0
+                    timeout=40.0
                 )
                 
                 translation_data = translation_response.json()
@@ -96,14 +85,12 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Pipeline Core Exception: {str(e)}"
+            yield f"Server Pipeline Exception: {str(e)}"
         finally:
-            # Cleanup temporary streams
-            for path in [temp_video_path, temp_audio_path]:
-                if os.path.exists(path):
-                    os.remove(path)
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
-    return StreamingResponse(native_api_streamer(), media_type="text/plain")
+    return StreamingResponse(native_groq_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
