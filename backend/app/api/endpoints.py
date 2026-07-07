@@ -1,5 +1,6 @@
 import os
 import httpx
+import subprocess
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -22,32 +23,40 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Large Video Optimization Core"}
+    return {"status": "online", "mode": "Badi Video Size Fix Engine"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
-        return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
+        return StreamingResponse(iter(["Error: GROQ_API_KEY missing on Render."]), media_type="text/plain")
 
-    temp_file_path = f"/tmp/{file.filename}"
+    temp_video_path = f"/tmp/{file.filename}"
+    temp_audio_path = f"/tmp/compressed_{os.path.splitext(file.filename)[0]}.mp3"
     
-    # Large File Handling: Saving in chunks to avoid memory overflow
-    with open(temp_file_path, "wb") as buffer:
-        while chunk := await file.read(1024 * 1024):  # 1MB chunks
+    # Save incoming big video in chunks
+    with open(temp_video_path, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):
             buffer.write(chunk)
 
-    async def large_file_pipeline():
+    async def compression_stream_pipeline():
         try:
-            # Enforcing an absolute connection layer with NO timeout restrictions for large uploads
-            timeout_setting = httpx.Timeout(None, connect=60.0) 
+            # 1. Native OS Level Audio Extraction (Bina pydub/moviepy ke 40MB video ko 2MB audio bana dega)
+            # Render has native ffmpeg binary support in basic shell layers
+            conversion_command = f"ffmpeg -i '{temp_video_path}' -vn -ar 16000 -ac 1 -b:a 64k -y '{temp_audio_path}'"
+            process = subprocess.run(conversion_command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # Agar OS extraction work kare toh audio use hoga, nahi toh fallback to native file
+            active_file_path = temp_audio_path if os.path.exists(temp_audio_path) and os.path.getsize(temp_audio_path) > 0 else temp_video_path
+
+            # 2. Unlimited Timeout Session setup for Groq Large Payload Ingestion
+            timeout_setting = httpx.Timeout(None, connect=60.0)
             
             async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                # 1. Sending Large File Stream to Whisper
-                with open(temp_file_path, "rb") as audio_file:
+                with open(active_file_path, "rb") as audio_file:
                     whisper_response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (file.filename, audio_file, file.content_type)},
+                        files={"file": (os.path.basename(active_file_path), audio_file, "audio/mp3" if active_file_path == temp_audio_path else file.content_type)},
                         data={"model": "whisper-large-v3"}
                     )
                 
@@ -55,16 +64,16 @@ async def handle_upload(file: UploadFile = File(...)):
                 raw_text = whisper_data.get("text", "")
 
                 if not raw_text:
-                    yield f"Error from Groq API: {whisper_data.get('error', {}).get('message', 'Failed to process large media block.')}"
+                    yield f"Error from Groq API: {whisper_data.get('error', {}).get('message', 'File size over 25MB limit or unreadable format.')}"
                     return
 
-                # 2. Strict Translation to English Layer
+                # 3. Force Translation strictly into professional English prose
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input is in Hindi, translate it to English. Output ONLY the final clean English text. Do not include notes, preamble, or explanations."
+                            "content": "CRITICAL: You are an expert academic translator. Translate the given text completely into fluent, professional English prose. If the input is in Hindi or Hinglish, translate it completely to English. Output ONLY the final clean English text. Do not include notes or preamble."
                         },
                         {"role": "user", "content": raw_text}
                     ],
@@ -87,12 +96,14 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Server Processing Timeout/Exception: {str(e)}"
+            yield f"Server Exception Core Trace: {str(e)}"
         finally:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            # Clean up both temp files safely
+            for path in [temp_video_path, temp_audio_path]:
+                if os.path.exists(path):
+                    os.remove(path)
 
-    return StreamingResponse(large_file_pipeline(), media_type="text/plain")
+    return StreamingResponse(compression_stream_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
