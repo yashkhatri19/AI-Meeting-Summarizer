@@ -204,7 +204,7 @@ export default function Dashboard() {
     }
   };
 
-  // Upgraded Pipeline with content-type verification
+  // Content-Stream fix to prevent corrupt audio extraction
   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
@@ -213,15 +213,15 @@ export default function Dashboard() {
 
     setLoading(true);
     setError("");
-    setTranscript("Initializing stable chunk stream..."); 
+    setTranscript("Initializing secure pipeline..."); 
 
-    const CHUNK_SIZE = 8 * 1024 * 1024; // Balanced 8MB
+    const CHUNK_SIZE = 6 * 1024 * 1024; // Optimal 6MB
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Connected to ${userProfile?.email}. Analysing segments...` }
+      { sender: "ai", text: `✨ Sync successful with pipeline channel.` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
@@ -233,16 +233,17 @@ export default function Dashboard() {
         const startByte = currentChunk * CHUNK_SIZE;
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
         
-        // Explicitly slicing as Blob with correct application container type
-        const fileChunkBlob = file.slice(startByte, endByte, file.type || "video/mp4");
+        // standard chunk slicing
+        const fileChunkBlob = file.slice(startByte, endByte);
 
         const formData = new FormData();
-        formData.append("file", fileChunkBlob, file.name); // Keep original filename structure
+        // Use a strict file name pattern to prevent backend parsing conflict
+        formData.append("file", fileChunkBlob, `chunk_${currentChunk}.mp4`); 
         formData.append("chunkIndex", currentChunk.toString());
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
 
-        setTranscript(`[System Status: Transmitting block ${currentChunk + 1} of ${totalChunks}...]`);
+        setTranscript(`[Processing: Uploading part ${currentChunk + 1} of ${totalChunks}...]`);
 
         const response = await fetch(`${RENDER_API_URL}/api/upload-chunk`, {
           method: "POST",
@@ -251,15 +252,15 @@ export default function Dashboard() {
 
         if (!response.ok) {
           const textError = await response.text();
-          throw new Error(`Server alert on segment ${currentChunk + 1}: ${response.status} - ${textError || 'Bad Chunk'}`);
+          throw new Error(`Server returned error on chunk ${currentChunk + 1}: ${textError}`);
         }
 
         const data = await response.json();
 
         if (data.status === "processing") {
-          setTranscript(`[System Status: Segment ${currentChunk + 1}/${totalChunks} processed. Assembling...]`);
+          setTranscript(`[System Status: Segment ${currentChunk + 1}/${totalChunks} uploaded. Transcribing...]`);
         } else if (data.status === "completed" || data.transcript) {
-          accumulatedTranscript = data.transcript || "Compilation successful.";
+          accumulatedTranscript = data.transcript || "Transcription compiled.";
           setTranscript(accumulatedTranscript);
 
           const newSession: HistoryItem = {
@@ -281,8 +282,8 @@ export default function Dashboard() {
 
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Binary stream synchronization failed.");
-      setTranscript(`Process halted due to error: ${err.message || "400 Error"}`);
+      setError(err.message || "Pipeline synchronization broken.");
+      setTranscript(`Halted: ${err.message || "Transcription failed."}`);
     } finally {
       setLoading(false);
     }
@@ -306,9 +307,9 @@ export default function Dashboard() {
       });
       
       const data = await response.json();
-      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: data.reply || "No reply track retrieved." }]);
+      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: data.reply || "No reply track." }]);
     } catch (err) {
-      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: "Error syncing request with conversational module." }]);
+      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: "Error syncing with agent." }]);
     } finally {
       setChatLoading(false);
     }
