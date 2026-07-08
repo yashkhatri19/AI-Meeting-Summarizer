@@ -1,8 +1,8 @@
 import os
 import httpx
-from fastapi import FastAPI, UploadFile, File, Body
+from fastapi import FastAPI, UploadFile, File, Body, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -14,114 +14,104 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Shared memory layout to track aggregated session pieces
+CHUNK_STORAGE = {}
 GLOBAL_CONTEXT = {
-    "latest_transcript": "No lecture content loaded yet. Please upload a video file."
+    "latest_transcript": "No lecture content loaded yet. Please upload a media file."
 }
 
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Advanced Automated Aggregator Core"}
+    return {"status": "online", "mode": "Production Frontend-Chunking Aggregator"}
 
-@app.post("/api/upload")
-async def handle_upload(file: UploadFile = File(...)):
+@app.post("/api/upload-chunk")
+async def handle_chunk_upload(
+    file: UploadFile = File(...),
+    chunkIndex: int = Form(...),
+    totalChunks: int = Form(...),
+    fileId: str = Form(...)
+):
     if not GROQ_KEY:
-        return StreamingResponse(iter(["Error: GROQ_API_KEY missing on Render settings."]), media_type="text/plain")
+        return JSONResponse(status_code=500, content={"error": "GROQ_API_KEY missing on Render."})
 
-    temp_file_path = f"/tmp/{file.filename}"
+    # Ensure a session track directory exists
+    session_dir = f"/tmp/{fileId}"
+    os.makedirs(session_dir, exist_ok=True)
     
-    # Save the incoming large file in sequential memory buffers safely
-    with open(temp_file_path, "wb") as buffer:
-        while chunk := await file.read(1024 * 1024):  # 1MB blocks
-            buffer.write(chunk)
+    chunk_path = f"{session_dir}/part_{chunkIndex}.mp4"
+    
+    # Save the current small independent blob chunk
+    with open(chunk_path, "wb") as buffer:
+        buffer.write(await file.read())
 
-    async def dynamic_audio_pipeline():
-        try:
-            file_size = os.path.getsize(temp_file_path)
-            # Safe boundary block: 22MB to ensure it never touches Groq's 25MB request limit
-            safe_limit = 22 * 1024 * 1024 
-            
-            timeout_setting = httpx.Timeout(None, connect=120.0)
-            collected_transcripts = []
+    # Check if all chunks have successfully landed
+    all_chunks_received = len(os.listdir(session_dir)) == totalChunks
 
-            async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                if file_size <= safe_limit:
-                    # Choti file ke liye standard injection request
-                    with open(temp_file_path, "rb") as media_file:
-                        response = await client.post(
-                            "https://api.groq.com/openai/v1/audio/transcriptions",
-                            headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                            files={"file": (file.filename, media_file, "video/mp4")},
-                            data={"model": "whisper-large-v3"}
-                        )
-                    res_json = response.json()
-                    if "text" in res_json:
-                        collected_transcripts.append(res_json["text"])
-                else:
-                    # Badi Video Files Layer: Sequential File Pointer Offset Windowing
-                    with open(temp_file_path, "rb") as master_file:
-                        chunk_index = 0
-                        while True:
-                            raw_data = master_file.read(safe_limit)
-                            if not raw_data:
-                                break
-                            
-                            # Forcing correct media header tags over chunk names to deceive validators
-                            part_name = f"segment_{chunk_index}.mp4"
-                            response = await client.post(
-                                "https://api.groq.com/openai/v1/audio/transcriptions",
-                                headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                                files={"file": (part_name, raw_data, "video/mp4")},
-                                data={"model": "whisper-large-v3"}
-                            )
-                            
-                            res_json = response.json()
-                            if "text" in res_json and res_json["text"].strip():
-                                collected_transcripts.append(res_json["text"])
-                            chunk_index += 1
+    if not all_chunks_received:
+        return {"status": "processing", "message": f"Chunk {chunkIndex + 1}/{totalChunks} saved."}
 
-                final_aggregated_text = " ".join(collected_transcripts).strip()
+    # Pipeline Processing Trigger once all blocks exist
+    try:
+        timeout_setting = httpx.Timeout(None, connect=120.0)
+        aggregated_raw_text = []
 
-                if not final_aggregated_text:
-                    yield "Error: File architecture structure mismatch. Please try converting the 50MB+ file format once."
-                    return
+        async with httpx.AsyncClient(timeout=timeout_setting) as client:
+            # Process each chunk sequentially in correct order
+            for i in range(totalChunks):
+                target_chunk_path = f"{session_dir}/part_{i}.mp4"
+                
+                with open(target_chunk_path, "rb") as target_file:
+                    whisper_response = await client.post(
+                        "https://api.groq.com/openai/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                        files={"file": (f"segment_{i}.mp4", target_file, "video/mp4")},
+                        data={"model": "whisper-large-v3"}
+                    )
+                
+                res_data = whisper_response.json()
+                if "text" in res_data and res_data["text"].strip():
+                    aggregated_raw_text.append(res_data["text"])
 
-                # 2. Complete Translation Core to Enforce English Text Outputs
-                translation_payload = {
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "CRITICAL: You are an expert academic translator. You will receive chunks of a lecture transcript that were processed sequentially. Merge them seamlessly into single, fluent, professional English prose. If the text is in Hindi or Hinglish, translate it fully to English. Output ONLY the final clean English text without any preamble, meta notes, or tags."
-                        },
-                        {"role": "user", "content": final_aggregated_text}
-                    ],
-                    "temperature": 0.2
-                }
+        final_combined_text = " ".join(aggregated_raw_text).strip()
 
-                translation_response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {GROQ_KEY}",
-                        "Content-Type": "application/json"
+        if not final_combined_text:
+            return JSONResponse(status_code=400, content={"error": "Could not extract text from any video chunks."})
+
+        # Final Academic English Alignment Layer
+        async with httpx.AsyncClient(timeout=timeout_setting) as client:
+            translation_payload = {
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "CRITICAL: You are an expert academic translator. Combine the following lecture transcript pieces into single, cohesive, fluent English prose. If the text is in Hindi/Hinglish, translate it fully to English. Output ONLY the clean English text without any intro or meta-commentary."
                     },
-                    json=translation_payload
-                )
-                
-                translation_data = translation_response.json()
-                english_output = translation_data["choices"][0]["message"]["content"].strip()
-                
-                GLOBAL_CONTEXT["latest_transcript"] = english_output
-                yield english_output
+                    {"role": "user", "content": final_combined_text}
+                ],
+                "temperature": 0.2
+            }
 
-        except Exception as e:
-            yield f"Server Processing Trace Exception: {str(e)}"
-        finally:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            translation_response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                json=translation_payload
+            )
+            
+        english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
+        GLOBAL_CONTEXT["latest_transcript"] = english_output
 
-    return StreamingResponse(dynamic_audio_pipeline(), media_type="text/plain")
+        return {"status": "completed", "transcript": english_output}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Aggregation processing broken: {str(e)}"})
+    finally:
+        # Cleanup session folder
+        if os.path.exists(session_dir):
+            for f in os.listdir(session_dir):
+                os.remove(os.path.join(session_dir, f))
+            os.rmdir(session_dir)
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
@@ -134,7 +124,7 @@ async def chat_agent(payload: dict = Body(...)):
             "messages": [
                 {
                     "role": "system",
-                    "content": f"You are an expert classroom teaching assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript:\n\n{active_context}"
+                    "content": f"You are an expert classroom assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript:\n\n{active_context}"
                 },
                 {"role": "user", "content": user_query}
             ],
@@ -144,14 +134,10 @@ async def chat_agent(payload: dict = Body(...)):
         async with httpx.AsyncClient() as client:
             chat_response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_KEY}",
-                    "Content-Type": "application/json"
-                },
+                headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
                 json=chat_payload,
                 timeout=30.0
             )
-            chat_data = chat_response.json()
-            return {"reply": chat_data["choices"][0]["message"]["content"].strip()}
+            return {"reply": chat_response.json()["choices"][0]["message"]["content"].strip()}
     except Exception as e:
-        return {"reply": f"Chat tracking error: {str(e)}"}
+        return {"reply": f"Chat failed: {str(e)}"}
