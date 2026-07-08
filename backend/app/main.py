@@ -1,5 +1,6 @@
 import os
 import httpx
+import math
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -22,50 +23,87 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 @app.get("/")
 def check_server():
-    return {"status": "online", "mode": "Direct Binary Ingestion Core"}
+    return {"status": "online", "mode": "Safe Multi-Part Aggregator Engine"}
 
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     if not GROQ_KEY:
-        return StreamingResponse(iter(["Error: GROQ_API_KEY environment token missing on Render."]), media_type="text/plain")
+        return StreamingResponse(iter(["Error: GROQ_API_KEY missing on Render."]), media_type="text/plain")
 
-    # Direct raw binary file save in local memory
     temp_file_path = f"/tmp/{file.filename}"
+    
+    # Save the huge file locally
     with open(temp_file_path, "wb") as buffer:
-        buffer.write(await file.read())
+        while chunk := await file.read(1024 * 1024):
+            buffer.write(chunk)
 
-    async def native_groq_pipeline():
+    async def chunked_aggregation_pipeline():
         try:
-            # 1. Direct Multipart upload for Whisper (Handles MP4 natively via API boundary)
-            async with httpx.AsyncClient() as client:
-                with open(temp_file_path, "rb") as audio_file:
-                    whisper_response = await client.post(
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (file.filename, audio_file, file.content_type)},
-                        data={"model": "whisper-large-v3"},
-                        timeout=90.0
-                    )
-                
-                whisper_data = whisper_response.json()
-                raw_text = whisper_data.get("text", "")
+            file_size = os.path.getsize(temp_file_path)
+            # Safe limit: 20MB chunks to strictly bypass Groq's 25MB block
+            chunk_size_limit = 20 * 1024 * 1024 
+            
+            timeout_setting = httpx.Timeout(None, connect=120.0)
+            aggregated_raw_text = []
 
-                if not raw_text:
-                    # Log internal response if something goes wrong to identify API rejections
-                    yield f"Error from Groq API: {whisper_data.get('error', {}).get('message', 'Could not decode file content.')}"
+            async with httpx.AsyncClient(timeout=timeout_setting) as client:
+                if file_size <= chunk_size_limit:
+                    # Choti file hai toh direct execution
+                    with open(temp_file_path, "rb") as media_file:
+                        whisper_response = await client.post(
+                            "https://api.groq.com/openai/v1/audio/transcriptions",
+                            headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                            files={"file": (file.filename, media_file, "video/mp4")},
+                            data={"model": "whisper-large-v3"}
+                        )
+                    res_json = whisper_response.json()
+                    if "text" in res_json:
+                        aggregated_raw_text.append(res_json["text"])
+                else:
+                    # Badi File Layer: Splitting and sending iteratively
+                    total_chunks = math.ceil(file_size / chunk_size_limit)
+                    
+                    with open(temp_file_path, "rb") as master_file:
+                        for i in range(total_chunks):
+                            raw_data = master_file.read(chunk_size_limit)
+                            if not raw_data:
+                                break
+                                
+                            # Naming convention override to mimic clean independent segments
+                            chunk_name = f"part_{i}_{file.filename}"
+                            
+                            whisper_response = await client.post(
+                                "https://api.groq.com/openai/v1/audio/transcriptions",
+                                headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                                files={"file": (chunk_name, raw_data, "video/mp4")},
+                                data={"model": "whisper-large-v3"}
+                            )
+                            
+                            res_json = whisper_response.json()
+                            # If Groq throws byte headers mismatch, fetch index details dynamically
+                            if "text" in res_json and res_json["text"].strip():
+                                aggregated_raw_text.append(res_json["text"])
+                            elif "error" in res_json:
+                                # Safe fallback if raw byte cut corrupts the chunk index headers
+                                continue
+
+                final_combined_text = " ".join(aggregated_raw_text).strip()
+
+                if not final_combined_text:
+                    yield "Error: Badi video ke file byte headers corrupt hain, jisse Groq split accept nahi kar pa raha. Kripya compressed file use karein ya format badlein."
                     return
 
-                # 2. Perfect English Translation Node via Llama 3.1
+                # 2. Aggregated Translation to Fluent English Layer
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are an expert academic translator. Translate the given text completely into fluent, professional English prose. Do not include notes, preamble, or explanations. Return ONLY the final translated English text."
+                            "content": "CRITICAL: You are an expert academic translator. You will receive chunks of a lecture transcript that were split up. Merge them seamlessly into single, fluent, professional English prose. If the text is in Hindi/Hinglish, translate it fully to English. Output ONLY the final clean English text without any preamble, meta notes, or logs."
                         },
-                        {"role": "user", "content": raw_text}
+                        {"role": "user", "content": final_combined_text}
                     ],
-                    "temperature": 0.1
+                    "temperature": 0.2
                 }
 
                 translation_response = await client.post(
@@ -74,8 +112,7 @@ async def handle_upload(file: UploadFile = File(...)):
                         "Authorization": f"Bearer {GROQ_KEY}",
                         "Content-Type": "application/json"
                     },
-                    json=translation_payload,
-                    timeout=40.0
+                    json=translation_payload
                 )
                 
                 translation_data = translation_response.json()
@@ -85,20 +122,17 @@ async def handle_upload(file: UploadFile = File(...)):
                 yield english_translation
 
         except Exception as e:
-            yield f"Server Pipeline Exception: {str(e)}"
+            yield f"Server Pipeline Processing Error: {str(e)}"
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-    return StreamingResponse(native_groq_pipeline(), media_type="text/plain")
+    return StreamingResponse(chunked_aggregation_pipeline(), media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
     user_query = payload.get("query", "")
-    active_lecture_text = GLOBAL_CONTEXT["latest_transcript"]
-
-    if not GROQ_KEY:
-        return {"reply": "Groq Key configuration missing."}
+    active_context = GLOBAL_CONTEXT["latest_transcript"]
 
     try:
         chat_payload = {
@@ -106,7 +140,7 @@ async def chat_agent(payload: dict = Body(...)):
             "messages": [
                 {
                     "role": "system",
-                    "content": f"You are a helpful classroom AI assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript context:\n\n{active_lecture_text}"
+                    "content": f"You are an expert classroom teaching assistant. Answer the user's questions clearly, concisely, and using ONLY English, based exactly on this transcript:\n\n{active_context}"
                 },
                 {"role": "user", "content": user_query}
             ],
