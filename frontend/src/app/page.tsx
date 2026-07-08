@@ -52,7 +52,6 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
   return (
     <div className="w-full max-w-md bg-slate-900/60 border border-slate-800/80 rounded-3xl p-8 backdrop-blur-2xl shadow-2xl relative overflow-hidden">
       <div className="absolute top-0 left-1/4 right-1/4 h-[1px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
-      
       <div className="flex flex-col items-center gap-3 mb-8 text-center">
         <div className="p-3 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-2xl shadow-xl shadow-indigo-500/10">
           <AudioLines className="h-6 w-6 text-white" />
@@ -62,7 +61,6 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
           <p className="text-xs text-slate-400 mt-1">Production Ready Identity Verification</p>
         </div>
       </div>
-
       <button 
         type="button"
         onClick={() => googleLoginTrigger()}
@@ -70,42 +68,32 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
       >
         <Chrome className="h-4 w-4 text-blue-600" /> Continue with Google
       </button>
-
       <div className="relative my-6 flex py-1 items-center">
         <div className="flex-grow border-t border-slate-800"></div>
         <span className="flex-shrink mx-4 text-[10px] text-slate-500 font-bold uppercase tracking-widest">Or Secure Login</span>
         <div className="flex-grow border-t border-slate-800"></div>
       </div>
-
       <form onSubmit={handleCustomSubmit} className="space-y-4">
         <div>
           <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Email</label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-3.5 h-4 w-4 text-slate-500" />
-            <input 
-              type="email" 
-              value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
-              placeholder="name@domain.com"
-              className="w-full bg-slate-950/60 border border-slate-800/80 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            />
-          </div>
+          <input 
+            type="email" 
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
+            placeholder="name@domain.com"
+            className="w-full bg-slate-950/60 border border-slate-800/80 rounded-xl px-4 py-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+          />
         </div>
-
         <div>
           <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Password</label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-3.5 h-4 w-4 text-slate-500" />
-            <input 
-              type="password" 
-              value={passInput}
-              onChange={(e) => setPassInput(e.target.value)}
-              placeholder="••••••••"
-              className="w-full bg-slate-950/60 border border-slate-800/80 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-            />
-          </div>
+          <input 
+            type="password" 
+            value={passInput}
+            onChange={(e) => setPassInput(e.target.value)}
+            placeholder="••••••••"
+            className="w-full bg-slate-950/60 border border-slate-800/80 rounded-xl px-4 py-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+          />
         </div>
-
         <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 mt-6">
           Sign In <LogIn className="h-3.5 w-3.5" />
         </button>
@@ -135,7 +123,6 @@ export default function Dashboard() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-
   const RENDER_API_URL = "https://ai-meeting-summarizer-fbf5.onrender.com";
 
   useEffect(() => {
@@ -145,9 +132,7 @@ export default function Dashboard() {
       setIsLoggedIn(true);
     }
     const savedHistory = localStorage.getItem("voxbrief_history");
-    if (savedHistory) {
-      setHistory(JSON.parse(savedHistory));
-    }
+    if (savedHistory) setHistory(JSON.parse(savedHistory));
   }, []);
 
   useEffect(() => {
@@ -174,7 +159,7 @@ export default function Dashboard() {
 
   const handleShareDashboard = () => {
     if (!transcript) return;
-    const shareText = `--- VoxBrief AI Intelligence Report ---\n\nFile: ${currentFileName}\nTranscript: ${transcript}`;
+    const shareText = `--- VoxBrief AI Report ---\nFile: ${currentFileName}\nTranscript: ${transcript}`;
     navigator.clipboard.writeText(shareText);
     setShareCopied(true);
     setTimeout(() => setShareCopied(false), 2500);
@@ -210,14 +195,14 @@ export default function Dashboard() {
     setError("");
     setTranscript("Initializing secure stream channels..."); 
 
-    // Balanced 15MB sequential chunk sizing to avoid fragmentation leaks on Render instances
-    const CHUNK_SIZE = 15 * 1024 * 1024; 
+    // Safe 10MB chunk configuration to prevent Render timeout/corruption
+    const CHUNK_SIZE = 10 * 1024 * 1024; 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Sync complete under: ${userProfile?.email}. Processing multi-part sequential stream components below!` }
+      { sender: "ai", text: `✨ Connected to pipeline. Analyzing segment components.` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
@@ -230,7 +215,8 @@ export default function Dashboard() {
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
         
         const fileChunkBlob = file.slice(startByte, endByte);
-        const chunkBlobFile = new File([fileChunkBlob], file.name, { type: file.type || "video/mp4" });
+        // Explicit naming and matching extension type to force clean assembly on backend
+        const chunkBlobFile = new File([fileChunkBlob], `chunk_${currentChunk}.mp4`, { type: "video/mp4" });
 
         const formData = new FormData();
         formData.append("file", chunkBlobFile); 
@@ -247,7 +233,7 @@ export default function Dashboard() {
 
         if (!response.ok) {
           const textError = await response.text();
-          throw new Error(textError || `Server error during verification.`);
+          throw new Error(textError || `Server alert on segment ${currentChunk + 1}`);
         }
 
         const data = await response.json();
@@ -286,7 +272,7 @@ export default function Dashboard() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || !transcript) return;
+    if (!chatInput.trim()) return;
 
     const userQuestion = chatInput.trim();
     const updatedMessagesWithUser = [...messages, { sender: "user" as const, text: userQuestion }];
@@ -309,17 +295,6 @@ export default function Dashboard() {
       setChatLoading(false);
     }
   };
-
-  if (!isLoggedIn) {
-    return (
-      <GoogleOAuthProvider clientId={clientId}>
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 antialiased">
-          {error && <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 px-4 py-2.5 rounded-xl mb-4 font-medium">{error}</p>}
-          <LoginGate onLoginSuccess={handleLoginSuccess} onErrorMsg={(msg) => setError(msg)} />
-        </div>
-      </GoogleOAuthProvider>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">
@@ -344,9 +319,9 @@ export default function Dashboard() {
 
           <div className="flex items-center gap-3 bg-slate-900/60 border border-slate-800/80 px-3 py-1 rounded-xl shadow-inner">
             <div className="h-6 w-6 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 text-[10px] font-bold text-white flex items-center justify-center uppercase">
-              {userProfile?.name.charAt(0)}
+              {userProfile?.name ? userProfile.name.charAt(0) : "U"}
             </div>
-            <span className="text-xs font-semibold text-slate-300 max-w-[90px] truncate">{userProfile?.name}</span>
+            <span className="text-xs font-semibold text-slate-300 max-w-[90px] truncate">{userProfile?.name || "User"}</span>
             <button type="button" onClick={handleLogout} className="text-[10px] text-slate-500 hover:text-rose-400 font-bold ml-1 border-l border-slate-800 pl-2 py-0.5">
               Exit
             </button>
@@ -405,8 +380,9 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="flex justify-end shrink-0">
-            <button type="button" onClick={handleUpload} disabled={loading || !file} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95">
+          <div className="flex justify-between items-center shrink-0">
+            <div className="text-xs text-rose-400 font-medium truncate max-w-[70%]">{error && error}</div>
+            <button type="button" onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg">
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>Process Stream <ArrowRight className="h-3.5 w-3.5" /></>}
             </button>
           </div>
@@ -414,11 +390,9 @@ export default function Dashboard() {
           <div className="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-5 flex flex-col flex-1 h-full min-h-0 overflow-hidden">
             <div className="flex justify-between items-center border-b border-slate-800/60 pb-2 mb-3 shrink-0">
               <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> INGESTED TRANSCRIPT STREAM</h3>
-              {transcript && (
-                <button type="button" onClick={handleShareDashboard} className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold border rounded-lg transition-all cursor-pointer ${shareCopied ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-slate-900/80 border-slate-800 text-slate-400 hover:text-slate-200"}`}>
-                  {shareCopied ? <><Check className="h-3 w-3" /> Copied!</> : <><Share2 className="h-3 w-3" /> Share Data</>}
-                </button>
-              )}
+              <button type="button" onClick={handleShareDashboard} className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold border rounded-lg transition-all cursor-pointer bg-slate-900/80 border-slate-800 text-slate-400 hover:text-slate-200">
+                {shareCopied ? <><Check className="h-3 w-3" /> Copied!</> : <><Share2 className="h-3 w-3" /> Share Data</>}
+              </button>
             </div>
 
             <div className="flex-1 overflow-y-auto text-xs text-slate-300 bg-slate-950/40 p-4 rounded-xl border border-slate-800/60 leading-relaxed font-mono whitespace-pre-wrap min-h-[150px]">
@@ -444,8 +418,8 @@ export default function Dashboard() {
           </div>
 
           <form onSubmit={handleSendMessage} className="p-2 border-t border-slate-800/60 bg-slate-950/40 flex gap-2 items-center shrink-0">
-            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} disabled={!transcript || chatLoading} placeholder="Query agent..." className="flex-1 text-xs bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500 disabled:opacity-50" />
-            <button type="submit" disabled={!chatInput.trim() || chatLoading || !transcript} className="p-2 bg-blue-600 text-white rounded-xl disabled:opacity-40 cursor-pointer"><Send className="h-3 w-3" /></button>
+            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Query agent..." className="flex-1 text-xs bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500" />
+            <button type="submit" className="p-2 bg-blue-600 text-white rounded-xl"><Send className="h-3 w-3" /></button>
           </form>
         </div>
       </main>
