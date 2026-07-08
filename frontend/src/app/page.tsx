@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import axios from "react-axios";
+import axios from "axios";
 import { GoogleOAuthProvider, useGoogleLogin } from "@react-oauth/google";
 import { 
   Upload, FileAudio, ArrowRight, Loader2, Send, Bot, 
