@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import axios from "axios";
+import axios from "react-axios";
 import { GoogleOAuthProvider, useGoogleLogin } from "@react-oauth/google";
 import { 
   Upload, FileAudio, ArrowRight, Loader2, Send, Bot, 
@@ -195,7 +195,7 @@ export default function Dashboard() {
     setError("");
     setTranscript("Initializing secure stream channels..."); 
 
-    // Safe 10MB chunk configuration to prevent Render timeout/corruption
+    // Sending standard raw file payload instead of strict custom blobs to prevent content type errors
     const CHUNK_SIZE = 10 * 1024 * 1024; 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
@@ -215,8 +215,7 @@ export default function Dashboard() {
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
         
         const fileChunkBlob = file.slice(startByte, endByte);
-        // Explicit naming and matching extension type to force clean assembly on backend
-        const chunkBlobFile = new File([fileChunkBlob], `chunk_${currentChunk}.mp4`, { type: "video/mp4" });
+        const chunkBlobFile = new File([fileChunkBlob], file.name, { type: file.type || "video/mp4" });
 
         const formData = new FormData();
         formData.append("file", chunkBlobFile); 
@@ -364,6 +363,7 @@ export default function Dashboard() {
 
         {/* Main interactive workflow */}
         <div className="md:col-span-2 lg:col-span-3 flex flex-col gap-4 h-full max-h-full overflow-hidden">
+          {/* Strict Constant Dropzone View - Never Hidden */}
           <div className="bg-slate-900/20 border-2 border-dashed border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center min-h-[140px] relative shrink-0">
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
             {!file ? (
@@ -380,6 +380,7 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* Constant Button Bar Control */}
           <div className="flex justify-between items-center shrink-0">
             <div className="text-xs text-rose-400 font-medium truncate max-w-[70%]">{error && error}</div>
             <button type="button" onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg">
