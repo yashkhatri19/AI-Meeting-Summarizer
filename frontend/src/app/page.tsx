@@ -68,6 +68,7 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
       </div>
 
       <button 
+        type="button"
         onClick={() => googleLoginTrigger()}
         className="w-full py-3 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2.5 active:scale-[0.98] shadow-lg shadow-black/10"
       >
@@ -139,6 +140,9 @@ export default function Dashboard() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
+  // Render Live Server URL Fixed
+  const RENDER_API_URL = "https://ai-meeting-summarizer-fbf5.onrender.com";
+
   useEffect(() => {
     const localUser = localStorage.getItem("voxbrief_user");
     if (localUser) {
@@ -201,6 +205,7 @@ export default function Dashboard() {
     }
   };
 
+  // Fixed Chunking Request Pipeline
   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
@@ -210,64 +215,71 @@ export default function Dashboard() {
     setLoading(true);
     setError("");
     setTranscript(""); 
-    
-    const formData = new FormData();
-    formData.append("file", file); 
 
-    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-    
+    const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB Chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const fileId = "vid_" + Date.now(); 
+    let accumulatedTranscript = "";
+
+    const initialMessages: Message[] = [
+      { sender: "ai", text: `✨ Sync complete under: ${userProfile?.email}. Processing multi-part sequential stream components below!` }
+    ];
+    setMessages(initialMessages);
+    setCurrentFileName(file.name);
+    const sizeStr = (file.size / 1024).toFixed(1) + " KB";
+    setCurrentFileSize(sizeStr);
+
     try {
-      const response = await fetch(`${API_BASE_URL}/api/upload`, {
-        method: "POST",
-        body: formData,
-      });
+      for (let currentChunk = 0; currentChunk < totalChunks; currentChunk++) {
+        const startByte = currentChunk * CHUNK_SIZE;
+        const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
+        const fileChunkBlob = file.slice(startByte, endByte);
 
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`);
+        const formData = new FormData();
+        formData.append("file", fileChunkBlob, `${fileId}_part_${currentChunk}.mp4`);
+        formData.append("chunkIndex", currentChunk.toString());
+        formData.append("totalChunks", totalChunks.toString());
+        formData.append("fileId", fileId);
+
+        // Fixed endpoint path -> /api/upload-chunk
+        const response = await fetch(`${RENDER_API_URL}/api/upload-chunk`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server status alert on chunk ${currentChunk + 1}: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status === "processing") {
+          setTranscript(`[System Log: Synced portion ${currentChunk + 1} of ${totalChunks}... Analysing stream...]`);
+        } else if (data.status === "completed") {
+          accumulatedTranscript = data.transcript;
+          setTranscript(accumulatedTranscript);
+
+          const newSession: HistoryItem = {
+            id: Date.now().toString(),
+            fileName: file.name,
+            fileSize: sizeStr,
+            transcript: accumulatedTranscript,
+            messages: initialMessages,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          };
+
+          const updatedHistory = [newSession, ...history];
+          saveToLocalStorage(updatedHistory);
+          setActiveSessionId(newSession.id);
+          setFile(null);
+        } else if (data.error) {
+          throw new Error(data.error);
+        }
       }
-
-      if (!response.body) {
-        throw new Error("ReadableStream not supported by the response channel.");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulatedTranscript = "";
-
-      const initialMessages: Message[] = [
-        { sender: "ai", text: `✨ Sync complete under: ${userProfile?.email}. Full transcript and summary stream initialized below!` }
-      ];
-      setMessages(initialMessages);
-      setCurrentFileName(file.name);
-      const sizeStr = (file.size / 1024).toFixed(1) + " KB";
-      setCurrentFileSize(sizeStr);
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        accumulatedTranscript += chunk;
-        setTranscript(accumulatedTranscript);
-      }
-
-      const newSession: HistoryItem = {
-        id: Date.now().toString(),
-        fileName: file.name,
-        fileSize: sizeStr,
-        transcript: accumulatedTranscript,
-        messages: initialMessages,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-
-      const updatedHistory = [newSession, ...history];
-      saveToLocalStorage(updatedHistory);
-      setActiveSessionId(newSession.id);
-      setFile(null);
 
     } catch (err: any) {
       console.error("Upload error context:", err);
-      setError(err.message || "Backend interface connection failed.");
+      setError(err.message || "Backend cluster connection failed.");
     } finally {
       setLoading(false);
     }
@@ -283,11 +295,20 @@ export default function Dashboard() {
     setChatInput("");
     setChatLoading(true);
 
-    // Placeholder alert to avoid crashing since chat agent endpoint needs backend mapping
-    setTimeout(() => {
-      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: "Follow-up Q&A node configuration is active on stream. Full chat querying will use the generated context index." }]);
+    try {
+      const response = await fetch(`${RENDER_API_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: userQuestion }),
+      });
+      
+      const data = await response.json();
+      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: data.reply || "No reply track retrieved." }]);
+    } catch (err) {
+      setMessages([...updatedMessagesWithUser, { sender: "ai" as const, text: "Error syncing request with conversational module." }]);
+    } finally {
       setChatLoading(false);
-    }, 1000);
+    }
   };
 
   if (!isLoggedIn) {
@@ -315,6 +336,7 @@ export default function Dashboard() {
         
         <div className="flex items-center gap-4">
           <button 
+            type="button"
             onClick={() => { setActiveSessionId(null); setTranscript(""); setMessages([]); setCurrentFileName(""); }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 rounded-xl transition"
           >
@@ -326,7 +348,7 @@ export default function Dashboard() {
               {userProfile?.name.charAt(0)}
             </div>
             <span className="text-xs font-semibold text-slate-300 max-w-[90px] truncate">{userProfile?.name}</span>
-            <button onClick={handleLogout} className="text-[10px] text-slate-500 hover:text-rose-400 font-bold ml-1 border-l border-slate-800 pl-2 py-0.5">
+            <button type="button" onClick={handleLogout} className="text-[10px] text-slate-500 hover:text-rose-400 font-bold ml-1 border-l border-slate-800 pl-2 py-0.5">
               Exit
             </button>
           </div>
@@ -357,7 +379,7 @@ export default function Dashboard() {
                   <p className="text-xs font-semibold truncate">{item.fileName}</p>
                   <p className="text-[9px] text-slate-500 mt-0.5">{item.timestamp} • {item.fileSize}</p>
                 </div>
-                <button onClick={(e) => deleteSession(item.id, e)} className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 p-1 transition-all">
+                <button type="button" onClick={(e) => deleteSession(item.id, e)} className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 p-1 transition-all">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -377,13 +399,13 @@ export default function Dashboard() {
               <div className="text-center flex flex-col items-center gap-2 z-20">
                 <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400"><FileAudio className="h-5 w-5" /></div>
                 <p className="text-xs font-semibold text-slate-300 truncate max-w-[240px]">{file.name}</p>
-                <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="text-[10px] text-rose-400 underline">Cancel</button>
+                <button type="button" onClick={(e) => { e.stopPropagation(); setFile(null); }} className="text-[10px] text-rose-400 underline">Cancel</button>
               </div>
             )}
           </div>
 
           <div className="flex justify-end shrink-0">
-            <button onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-semibold rounded-xl flex items-center gap-2 transition-all">
+            <button type="button" onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-semibold rounded-xl flex items-center gap-2 transition-all">
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>Process Stream <ArrowRight className="h-3.5 w-3.5" /></>}
             </button>
           </div>
@@ -392,7 +414,7 @@ export default function Dashboard() {
             <div className="flex justify-between items-center border-b border-slate-800/60 pb-2 mb-3 shrink-0">
               <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Ingested Transcript Stream</h3>
               {transcript && (
-                <button onClick={handleShareDashboard} className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold border rounded-lg transition-all ${shareCopied ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-slate-900/80 border-slate-800 text-slate-400"}`}>
+                <button type="button" onClick={handleShareDashboard} className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold border rounded-lg transition-all ${shareCopied ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-slate-900/80 border-slate-800 text-slate-400"}`}>
                   {shareCopied ? <><Check className="h-3 w-3" /> Copied!</> : <><Share2 className="h-3 w-3" /> Share Data</>}
                 </button>
               )}
