@@ -204,7 +204,7 @@ export default function Dashboard() {
     }
   };
 
-  // Safe chunk handling with better logging and smaller byte size
+  // Upgraded Pipeline with content-type verification
   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
@@ -213,34 +213,36 @@ export default function Dashboard() {
 
     setLoading(true);
     setError("");
-    setTranscript("Initializing secure pipeline connection..."); 
+    setTranscript("Initializing stable chunk stream..."); 
 
-    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks to prevent Render Free-tier memory crashes
+    const CHUNK_SIZE = 8 * 1024 * 1024; // Balanced 8MB
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    const fileId = "vid_" + Date.now(); 
+    const fileId = "vox_" + Date.now(); 
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Sync complete under: ${userProfile?.email}. Processing multi-part sequential stream components below!` }
+      { sender: "ai", text: `✨ Connected to ${userProfile?.email}. Analysing segments...` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
-    const sizeStr = (file.size / 1024).toFixed(1) + " KB";
+    const sizeStr = (file.size / (1024 * 1024)).toFixed(2) + " MB";
     setCurrentFileSize(sizeStr);
 
     try {
       for (let currentChunk = 0; currentChunk < totalChunks; currentChunk++) {
         const startByte = currentChunk * CHUNK_SIZE;
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
-        const fileChunkBlob = file.slice(startByte, endByte);
+        
+        // Explicitly slicing as Blob with correct application container type
+        const fileChunkBlob = file.slice(startByte, endByte, file.type || "video/mp4");
 
         const formData = new FormData();
-        formData.append("file", fileChunkBlob, `${fileId}_part_${currentChunk}.mp4`);
+        formData.append("file", fileChunkBlob, file.name); // Keep original filename structure
         formData.append("chunkIndex", currentChunk.toString());
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
 
-        setTranscript(`[System Status: Sending chunk ${currentChunk + 1} of ${totalChunks} to Render API...]`);
+        setTranscript(`[System Status: Transmitting block ${currentChunk + 1} of ${totalChunks}...]`);
 
         const response = await fetch(`${RENDER_API_URL}/api/upload-chunk`, {
           method: "POST",
@@ -248,15 +250,16 @@ export default function Dashboard() {
         });
 
         if (!response.ok) {
-          throw new Error(`Server returned HTTP code ${response.status} on segment ${currentChunk + 1}`);
+          const textError = await response.text();
+          throw new Error(`Server alert on segment ${currentChunk + 1}: ${response.status} - ${textError || 'Bad Chunk'}`);
         }
 
         const data = await response.json();
 
         if (data.status === "processing") {
-          setTranscript(`[System Log: Portion ${currentChunk + 1} of ${totalChunks} verified. Processing next block...]`);
+          setTranscript(`[System Status: Segment ${currentChunk + 1}/${totalChunks} processed. Assembling...]`);
         } else if (data.status === "completed" || data.transcript) {
-          accumulatedTranscript = data.transcript || "Transcription compiled.";
+          accumulatedTranscript = data.transcript || "Compilation successful.";
           setTranscript(accumulatedTranscript);
 
           const newSession: HistoryItem = {
@@ -273,16 +276,14 @@ export default function Dashboard() {
           setActiveSessionId(newSession.id);
           setFile(null);
           break;
-        } else if (data.error) {
-          throw new Error(data.error);
         }
       }
 
     } catch (err: any) {
-      console.error("Upload process error tracker:", err);
-      setError(err.message || "Render compilation channel broken.");
-      setTranscript(`Process halted due to error: ${err.message || "Timeout"}`);
-    } {
+      console.error(err);
+      setError(err.message || "Binary stream synchronization failed.");
+      setTranscript(`Process halted due to error: ${err.message || "400 Error"}`);
+    } finally {
       setLoading(false);
     }
   };
