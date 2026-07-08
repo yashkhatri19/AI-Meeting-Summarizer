@@ -140,7 +140,6 @@ export default function Dashboard() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
-  // Render Live Server URL Fixed
   const RENDER_API_URL = "https://ai-meeting-summarizer-fbf5.onrender.com";
 
   useEffect(() => {
@@ -205,7 +204,7 @@ export default function Dashboard() {
     }
   };
 
-  // Fixed Chunking Request Pipeline
+  // Safe chunk handling with better logging and smaller byte size
   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
@@ -214,9 +213,9 @@ export default function Dashboard() {
 
     setLoading(true);
     setError("");
-    setTranscript(""); 
+    setTranscript("Initializing secure pipeline connection..."); 
 
-    const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB Chunks
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks to prevent Render Free-tier memory crashes
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vid_" + Date.now(); 
     let accumulatedTranscript = "";
@@ -241,22 +240,23 @@ export default function Dashboard() {
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
 
-        // Fixed endpoint path -> /api/upload-chunk
+        setTranscript(`[System Status: Sending chunk ${currentChunk + 1} of ${totalChunks} to Render API...]`);
+
         const response = await fetch(`${RENDER_API_URL}/api/upload-chunk`, {
           method: "POST",
           body: formData,
         });
 
         if (!response.ok) {
-          throw new Error(`Server status alert on chunk ${currentChunk + 1}: ${response.status}`);
+          throw new Error(`Server returned HTTP code ${response.status} on segment ${currentChunk + 1}`);
         }
 
         const data = await response.json();
 
         if (data.status === "processing") {
-          setTranscript(`[System Log: Synced portion ${currentChunk + 1} of ${totalChunks}... Analysing stream...]`);
-        } else if (data.status === "completed") {
-          accumulatedTranscript = data.transcript;
+          setTranscript(`[System Log: Portion ${currentChunk + 1} of ${totalChunks} verified. Processing next block...]`);
+        } else if (data.status === "completed" || data.transcript) {
+          accumulatedTranscript = data.transcript || "Transcription compiled.";
           setTranscript(accumulatedTranscript);
 
           const newSession: HistoryItem = {
@@ -272,15 +272,17 @@ export default function Dashboard() {
           saveToLocalStorage(updatedHistory);
           setActiveSessionId(newSession.id);
           setFile(null);
+          break;
         } else if (data.error) {
           throw new Error(data.error);
         }
       }
 
     } catch (err: any) {
-      console.error("Upload error context:", err);
-      setError(err.message || "Backend cluster connection failed.");
-    } finally {
+      console.error("Upload process error tracker:", err);
+      setError(err.message || "Render compilation channel broken.");
+      setTranscript(`Process halted due to error: ${err.message || "Timeout"}`);
+    } {
       setLoading(false);
     }
   };
@@ -420,10 +422,8 @@ export default function Dashboard() {
               )}
             </div>
 
-            {transcript ? (
+            {transcript && (
               <div className="flex-1 overflow-y-auto text-xs text-slate-300 bg-slate-950/40 p-4 rounded-xl border border-slate-800/60 leading-relaxed font-mono whitespace-pre-wrap">{transcript}</div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-slate-600 italic border border-dashed border-slate-800/40 rounded-xl">Context channel inactive.</div>
             )}
           </div>
         </div>
