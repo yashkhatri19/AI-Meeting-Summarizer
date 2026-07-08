@@ -204,7 +204,7 @@ export default function Dashboard() {
     }
   };
 
-  // Content-Stream fix to prevent corrupt audio extraction
+  // Fixed structural binary payload compilation 
   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
@@ -213,15 +213,16 @@ export default function Dashboard() {
 
     setLoading(true);
     setError("");
-    setTranscript("Initializing secure pipeline..."); 
+    setTranscript("Initializing seamless data transfer channel..."); 
 
-    const CHUNK_SIZE = 6 * 1024 * 1024; // Optimal 6MB
+    // Using 5MB to ensure cloud instances do not drop indices
+    const CHUNK_SIZE = 5 * 1024 * 1024; 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Sync successful with pipeline channel.` }
+      { sender: "ai", text: `✨ Node setup completed. Pipeline active for structural analysis.` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
@@ -233,17 +234,17 @@ export default function Dashboard() {
         const startByte = currentChunk * CHUNK_SIZE;
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
         
-        // standard chunk slicing
+        // Strictly slices raw bytes without modifying the container structure
         const fileChunkBlob = file.slice(startByte, endByte);
+        const chunkFile = new File([fileChunkBlob], file.name, { type: file.type });
 
         const formData = new FormData();
-        // Use a strict file name pattern to prevent backend parsing conflict
-        formData.append("file", fileChunkBlob, `chunk_${currentChunk}.mp4`); 
+        formData.append("file", chunkFile); 
         formData.append("chunkIndex", currentChunk.toString());
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
 
-        setTranscript(`[Processing: Uploading part ${currentChunk + 1} of ${totalChunks}...]`);
+        setTranscript(`[Uploading: Transmitting part ${currentChunk + 1} of ${totalChunks} safely...]`);
 
         const response = await fetch(`${RENDER_API_URL}/api/upload-chunk`, {
           method: "POST",
@@ -252,15 +253,15 @@ export default function Dashboard() {
 
         if (!response.ok) {
           const textError = await response.text();
-          throw new Error(`Server returned error on chunk ${currentChunk + 1}: ${textError}`);
+          throw new Error(`Cloud engine rejected packet ${currentChunk + 1}: ${textError}`);
         }
 
         const data = await response.json();
 
         if (data.status === "processing") {
-          setTranscript(`[System Status: Segment ${currentChunk + 1}/${totalChunks} uploaded. Transcribing...]`);
+          setTranscript(`[Processing: Block ${currentChunk + 1}/${totalChunks} integrated. Compiling data bits...]`);
         } else if (data.status === "completed" || data.transcript) {
-          accumulatedTranscript = data.transcript || "Transcription compiled.";
+          accumulatedTranscript = data.transcript || "Conversion completed successfully.";
           setTranscript(accumulatedTranscript);
 
           const newSession: HistoryItem = {
@@ -282,8 +283,8 @@ export default function Dashboard() {
 
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Pipeline synchronization broken.");
-      setTranscript(`Halted: ${err.message || "Transcription failed."}`);
+      setError(err.message || "Binary track configuration mismatch.");
+      setTranscript(`Process halted due to error: ${err.message || "Extraction Exception"}`);
     } finally {
       setLoading(false);
     }
