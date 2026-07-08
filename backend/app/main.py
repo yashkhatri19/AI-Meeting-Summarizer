@@ -22,7 +22,7 @@ GLOBAL_CONTEXT = {
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TEMP_DIR = "./temp_chunks"
 
-@app.get("/")
+@app.get("/", methods=["GET", "HEAD"])
 def check_server():
     return {"status": "online", "mode": "Production Frontend-Chunking Aggregator"}
 
