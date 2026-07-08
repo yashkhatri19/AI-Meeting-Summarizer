@@ -4,7 +4,6 @@ import shutil
 from fastapi import FastAPI, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-# Import moviepy to strip audio from video locally
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 app = FastAPI()
@@ -17,26 +16,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GLOBAL_CONTEXT = {
-    "latest_transcript": "No lecture content loaded yet. Please upload a media file."
-}
+# FIXED: Dictionary to isolate transcripts based on active session/email securely
+USER_TRANSCRIPT_STORAGE = {}
 
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TEMP_DIR = "./temp_chunks"
 
 @app.route("/", methods=["GET", "HEAD"])
 def check_server():
-    return {"status": "online", "mode": "Production Frontend-Chunking Aggregator with Audio Compression"}
+    return {"status": "online", "mode": "Production Session-Isolated Aggregator"}
 
 @app.post("/api/upload-chunk")
 async def upload_chunk(
     file: UploadFile = File(...),
     chunkIndex: int = Form(...),
     totalChunks: int = Form(...),
-    fileId: str = Form(...)
+    fileId: str = Form(...),
+    email: str = Form("anonymous")  # Accept logged-in user email from frontend
 ):
     os.makedirs(TEMP_DIR, exist_ok=True)
-    
     session_dir = os.path.join(TEMP_DIR, fileId)
     os.makedirs(session_dir, exist_ok=True)
     
@@ -49,7 +47,6 @@ async def upload_chunk(
         final_video_path = os.path.join(session_dir, f"{fileId}_final.mp4")
         final_audio_path = os.path.join(session_dir, f"{fileId}_final.mp3")
         
-        # 1. Assemble segments into single media file
         try:
             with open(final_video_path, "wb") as final_file:
                 for i in range(totalChunks):
@@ -60,9 +57,9 @@ async def upload_chunk(
                     else:
                         return JSONResponse(status_code=400, content={"error": f"Missing chunk part {i}"})
         except Exception as e:
-            return JSONResponse(status_code=500, content={"error": f"Failed assembling streams: {str(e)}"})
+            return JSONResponse(status_code=500, content={"error": f"Failed stream assembly: {str(e)}"})
 
-        # 2. Extract Audio from Video to dramatically compress payload size under 25MB
+        # Video-to-audio extraction for compression
         try:
             video_clip = VideoFileClip(final_video_path)
             if video_clip.audio is not None:
@@ -71,19 +68,16 @@ async def upload_chunk(
                 target_transcription_file = final_audio_path
             else:
                 video_clip.close()
-                target_transcription_file = final_video_path # Fallback if no audio track exists
+                target_transcription_file = final_video_path
         except Exception as e:
-            # Fallback securely if moviepy raises format parsing issues
             target_transcription_file = final_video_path
 
-        # 3. Request Transcription from Groq safely
         try:
             timeout_setting = httpx.Timeout(None, connect=120.0)
             final_combined_text = ""
 
             async with httpx.AsyncClient(timeout=timeout_setting) as client:
                 with open(target_transcription_file, "rb") as target_file:
-                    # Send compressed file (.mp3 / fallback .mp4)
                     file_extension = os.path.splitext(target_transcription_file)[1]
                     mime_type = "audio/mp3" if file_extension == ".mp3" else "video/mp4"
                     
@@ -95,16 +89,15 @@ async def upload_chunk(
                     )
                 
                 res_data = whisper_response.json()
-                
                 if whisper_response.status_code != 200:
                     return JSONResponse(status_code=whisper_response.status_code, content={"error": f"Groq Whisper Error: {res_data}"})
                 
                 final_combined_text = res_data.get("text", "").strip()
 
             if not final_combined_text:
-                return JSONResponse(status_code=400, content={"error": "Could not extract text from any video chunks."})
+                return JSONResponse(status_code=400, content={"error": "Could not extract text."})
 
-            # 4. Refinement & Translation Pipeline
+            # Refinement and Translation Layer
             async with httpx.AsyncClient(timeout=timeout_setting) as client:
                 translation_payload = {
                     "model": "llama-3.1-8b-instant",
@@ -124,10 +117,12 @@ async def upload_chunk(
                     json=translation_payload
                 )
                 
-                translation_data = translation_response.json()
-                english_output = translation_data["choices"][0]["message"]["content"].strip()
+                english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
                 
-            GLOBAL_CONTEXT["latest_transcript"] = english_output
+            # FIXED: Store transcription isolated by User email or fileId instead of global leak
+            USER_TRANSCRIPT_STORAGE[email] = english_output
+            USER_TRANSCRIPT_STORAGE[fileId] = english_output
+
             return {"status": "completed", "transcript": english_output}
 
         except Exception as e:
@@ -141,7 +136,11 @@ async def upload_chunk(
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
     user_query = payload.get("query", "")
-    active_context = GLOBAL_CONTEXT["latest_transcript"]
+    email = payload.get("email", "anonymous")  # Extract user's email context
+    file_id = payload.get("fileId", "")        # Extract alternative fileId context
+    
+    # FIXED: Fetch only this user's isolated data, fallback to global message if missing
+    active_context = USER_TRANSCRIPT_STORAGE.get(email) or USER_TRANSCRIPT_STORAGE.get(file_id) or "No contextual lecture transcript found for your session."
 
     try:
         chat_payload = {
