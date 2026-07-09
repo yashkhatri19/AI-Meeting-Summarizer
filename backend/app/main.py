@@ -83,7 +83,7 @@ async def login(payload: dict = Body(...)):
     conn.close()
     
     if not row or not pwd_context.verify(password, row[0]):
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
+        raise HTTPException(status_code=401, detail="Please do Register or check your credentials.")
         
     expire = datetime.utcnow() + timedelta(hours=24)
     token = jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)

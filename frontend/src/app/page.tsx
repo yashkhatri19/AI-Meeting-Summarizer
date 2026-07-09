@@ -251,7 +251,7 @@ function Dashboard() {
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Connected to pipeline. Analyzing segment components.` }
+      { sender: "ai", text: `✨ Ask Anythink about your Video Content!` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
