@@ -33,8 +33,14 @@ TEMP_DIR = "./temp_chunks"
 executor = ThreadPoolExecutor(max_workers=4)
 
 def init_db():
-    conn = sqlite3.connect("users.db")
+    # timeout=30000 yani 30 seconds tak wait karega agar database locked hai to, crash nahi hoga
+    conn = sqlite3.connect("users.db", timeout=30.0) 
     cursor = conn.cursor()
+    
+    # WAL mode concurrent reads aur writes ko bohot behtar handle karta hai
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+    
     # User Credentials Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -73,7 +79,7 @@ async def register(payload: dict = Body(...)):
     
     hashed_pwd = pwd_context.hash(password)
     try:
-        conn = sqlite3.connect("users.db")
+        conn = sqlite3.connect("users.db", timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hashed_pwd))
         conn.commit()
@@ -87,7 +93,7 @@ async def login(payload: dict = Body(...)):
     email = payload.get("email", "").strip().lower()
     password = payload.get("password", "")
     
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("users.db", timeout=30.0)
     cursor = conn.cursor()
     cursor.execute("SELECT password FROM users WHERE email = ?", (email,))
     row = cursor.fetchone()
@@ -116,7 +122,7 @@ def sync_extract_audio(final_video_path, final_audio_path):
 async def get_history(email: str):
     email_clean = email.strip().lower()
     try:
-        conn = sqlite3.connect("users.db")
+        conn = sqlite3.connect("users.db", timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, file_name, file_size, transcript, timestamp 
@@ -141,7 +147,7 @@ async def get_history(email: str):
 @app.delete("/api/history/{session_id}")
 async def delete_history(session_id: str, email: str):
     try:
-        conn = sqlite3.connect("users.db")
+        conn = sqlite3.connect("users.db", timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM upload_history WHERE id = ? AND email = ?", (session_id, email.strip().lower()))
         conn.commit()
@@ -223,7 +229,7 @@ async def upload_chunk(
             size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
             current_time_str = datetime.now().strftime("%I:%M %p")
             
-            conn = sqlite3.connect("users.db")
+            conn = sqlite3.connect("users.db", timeout=30.0)
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO upload_history (id, email, file_name, file_size, transcript, timestamp)
@@ -250,7 +256,7 @@ async def chat_agent(payload: dict = Body(...)):
     # Secure Context Parsing inside DB instead of global RAM Dict
     active_context = "No contextual lecture transcript found."
     try:
-        conn = sqlite3.connect("users.db")
+        conn = sqlite3.connect("users.db", timeout=30.0)
         cursor = conn.cursor()
         cursor.execute("SELECT transcript FROM upload_history WHERE id = ? AND email = ?", (file_id, email))
         row = cursor.fetchone()
