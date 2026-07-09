@@ -32,16 +32,15 @@ GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TEMP_DIR = "./temp_chunks"
 executor = ThreadPoolExecutor(max_workers=4)
 
+def get_db_connection():
+    conn = sqlite3.connect("users.db", timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    return conn
+
 def init_db():
-    # timeout=30000 yani 30 seconds tak wait karega agar database locked hai to, crash nahi hoga
-    conn = sqlite3.connect("users.db", timeout=30.0) 
+    conn = get_db_connection() 
     cursor = conn.cursor()
-    
-    # WAL mode concurrent reads aur writes ko bohot behtar handle karta hai
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
-    
-    # User Credentials Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +48,6 @@ def init_db():
             password TEXT NOT NULL
         )
     """)
-    # Secure User-Isolated History Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS upload_history (
             id TEXT PRIMARY KEY,
@@ -65,11 +63,18 @@ def init_db():
 
 init_db()
 
-@app.route("/", methods=["GET", "HEAD"])
-def check_server():
-    return {"status": "online", "mode": "Production Session-Isolated Aggregator"}
+def sync_extract_audio(final_video_path, final_audio_path):
+    try:
+        video_clip = VideoFileClip(final_video_path)
+        if video_clip.audio is not None:
+            video_clip.audio.write_audiofile(final_audio_path, logger=None)
+            video_clip.close()
+            return final_audio_path
+        video_clip.close()
+    except Exception:
+        pass
+    return final_video_path
 
-# --- AUTH ENDPOINTS ---
 @app.post("/api/auth/register")
 async def register(payload: dict = Body(...)):
     email = payload.get("email", "").strip().lower()
@@ -79,7 +84,7 @@ async def register(payload: dict = Body(...)):
     
     hashed_pwd = pwd_context.hash(password)
     try:
-        conn = sqlite3.connect("users.db", timeout=30.0)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hashed_pwd))
         conn.commit()
@@ -93,7 +98,7 @@ async def login(payload: dict = Body(...)):
     email = payload.get("email", "").strip().lower()
     password = payload.get("password", "")
     
-    conn = sqlite3.connect("users.db", timeout=30.0)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT password FROM users WHERE email = ?", (email,))
     row = cursor.fetchone()
@@ -106,23 +111,11 @@ async def login(payload: dict = Body(...)):
     token = jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return {"token": token, "email": email}
 
-def sync_extract_audio(final_video_path, final_audio_path):
-    try:
-        video_clip = VideoFileClip(final_video_path)
-        if video_clip.audio is not None:
-            video_clip.audio.write_audiofile(final_audio_path, logger=None)
-            video_clip.close()
-            return final_audio_path
-        video_clip.close()
-    except Exception:
-        pass
-    return final_video_path
-
 @app.get("/api/history")
 async def get_history(email: str):
     email_clean = email.strip().lower()
     try:
-        conn = sqlite3.connect("users.db", timeout=30.0)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, file_name, file_size, transcript, timestamp 
@@ -147,7 +140,7 @@ async def get_history(email: str):
 @app.delete("/api/history/{session_id}")
 async def delete_history(session_id: str, email: str):
     try:
-        conn = sqlite3.connect("users.db", timeout=30.0)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM upload_history WHERE id = ? AND email = ?", (session_id, email.strip().lower()))
         conn.commit()
@@ -161,91 +154,99 @@ async def upload_chunk(
     file: UploadFile = File(...),
     chunkIndex: int = Form(...),
     totalChunks: int = Form(...),
-    fileId: str = Form(...),
-    email: str = Form("anonymous")
+    fileId: str = Form(...)
 ):
-    os.makedirs(TEMP_DIR, exist_ok=True)
+    try:
+        session_dir = os.path.join(TEMP_DIR, fileId)
+        os.makedirs(session_dir, exist_ok=True)
+        
+        chunk_path = os.path.join(session_dir, f"part_{chunkIndex}.tmp")
+        with open(chunk_path, "wb") as f:
+            f.write(await file.read())
+            
+        return {"status": "processing", "message": f"Chunk {chunkIndex + 1}/{totalChunks} saved."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Chunk upload failed: {str(e)}"})
+
+@app.post("/api/assemble-file")
+async def assemble_file(payload: dict = Body(...)):
+    fileId = payload.get("fileId")
+    totalChunks = payload.get("totalChunks")
+    fileName = payload.get("fileName", "video.mp4")
+    email = payload.get("email", "anonymous").lower().strip()
+
+    if not fileId or totalChunks is None:
+        raise HTTPException(status_code=400, detail="Missing required assembly parameters.")
+
     session_dir = os.path.join(TEMP_DIR, fileId)
-    os.makedirs(session_dir, exist_ok=True)
-    
-    chunk_path = os.path.join(session_dir, f"part_{chunkIndex}.tmp")
-    with open(chunk_path, "wb") as f:
-        f.write(await file.read())
-        
-    if chunkIndex == totalChunks - 1:
-        final_video_path = os.path.join(session_dir, f"{fileId}_final.mp4")
-        final_audio_path = os.path.join(session_dir, f"{fileId}_final.mp3")
-        
-        try:
-            with open(final_video_path, "wb") as final_file:
-                for i in range(totalChunks):
-                    c_path = os.path.join(session_dir, f"part_{i}.tmp")
-                    if os.path.exists(c_path):
-                        with open(c_path, "rb") as source_chunk:
-                            final_file.write(source_chunk.read())
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": f"Failed stream assembly: {str(e)}"})
+    final_video_path = os.path.join(session_dir, f"{fileId}_final.mp4")
+    final_audio_path = os.path.join(session_dir, f"{fileId}_final.mp3")
+
+    try:
+        with open(final_video_path, "wb") as final_file:
+            for i in range(totalChunks):
+                c_path = os.path.join(session_dir, f"part_{i}.tmp")
+                if not os.path.exists(c_path):
+                    raise HTTPException(status_code=400, detail=f"Missing chunk file part_{i}")
+                with open(c_path, "rb") as source_chunk:
+                    final_file.write(source_chunk.read())
 
         loop = asyncio.get_running_loop()
         target_transcription_file = await loop.run_in_executor(
             executor, sync_extract_audio, final_video_path, final_audio_path
         )
 
-        try:
-            timeout_setting = httpx.Timeout(None, connect=120.0)
-            async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                with open(target_transcription_file, "rb") as target_file:
-                    file_extension = os.path.splitext(target_transcription_file)[1]
-                    mime_type = "audio/mp3" if file_extension == ".mp3" else "video/mp4"
-                    
-                    whisper_response = await client.post(
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                        files={"file": (f"audio_{fileId}{file_extension}", target_file, mime_type)},
-                        data={"model": "whisper-large-v3"}
-                    )
-                res_data = whisper_response.json()
-                final_combined_text = res_data.get("text", "").strip()
-
-            if not final_combined_text:
-                return JSONResponse(status_code=400, content={"error": "Could not extract text."})
-
-            async with httpx.AsyncClient(timeout=timeout_setting) as client:
-                translation_response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": "llama-3.1-8b-instant",
-                        "messages": [
-                            {"role": "system", "content": "CRITICAL: You are an expert academic translator. Combine transcript pieces into clean cohesive English prose only. Never use any language other than English."},
-                            {"role": "user", "content": final_combined_text}
-                        ],
-                        "temperature": 0.2
-                    }
-                )
-                english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
+        timeout_setting = httpx.Timeout(None, connect=120.0)
+        async with httpx.AsyncClient(timeout=timeout_setting) as client:
+            with open(target_transcription_file, "rb") as target_file:
+                file_extension = os.path.splitext(target_transcription_file)[1]
+                mime_type = "audio/mp3" if file_extension == ".mp3" else "video/mp4"
                 
-            # Database Save Logic
-            size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
-            current_time_str = datetime.now().strftime("%I:%M %p")
+                whisper_response = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                    files={"file": (f"audio_{fileId}{file_extension}", target_file, mime_type)},
+                    data={"model": "whisper-large-v3"}
+                )
+            res_data = whisper_response.json()
+            final_combined_text = res_data.get("text", "").strip()
+
+        if not final_combined_text:
+            return JSONResponse(status_code=400, content={"error": "Could not extract text."})
+
+        async with httpx.AsyncClient(timeout=timeout_setting) as client:
+            translation_response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [
+                        {"role": "system", "content": "CRITICAL: You are an expert academic translator. Combine transcript pieces into clean cohesive English prose only. Never use any language other than English."},
+                        {"role": "user", "content": final_combined_text}
+                    ],
+                    "temperature": 0.2
+                }
+            )
+            english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
             
-            conn = sqlite3.connect("users.db", timeout=30.0)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO upload_history (id, email, file_name, file_size, transcript, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (fileId, email.lower().strip(), file.filename, size_calculated, english_output, current_time_str))
-            conn.commit()
-            conn.close()
+        size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
+        current_time_str = datetime.now().strftime("%I:%M %p")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO upload_history (id, email, file_name, file_size, transcript, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (fileId, email, fileName, size_calculated, english_output, current_time_str))
+        conn.commit()
+        conn.close()
 
-            return {"status": "completed", "transcript": english_output}
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
-        finally:
-            if os.path.exists(session_dir):
-                shutil.rmtree(session_dir)
-
-    return {"status": "processing", "message": f"Chunk {chunkIndex + 1}/{totalChunks} saved."}
+        return {"status": "completed", "transcript": english_output}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        if os.path.exists(session_dir):
+            shutil.rmtree(session_dir)
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
@@ -253,10 +254,9 @@ async def chat_agent(payload: dict = Body(...)):
     email = payload.get("email", "anonymous").lower().strip()
     file_id = payload.get("fileId", "")
     
-    # Secure Context Parsing inside DB instead of global RAM Dict
     active_context = "No contextual lecture transcript found."
     try:
-        conn = sqlite3.connect("users.db", timeout=30.0)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT transcript FROM upload_history WHERE id = ? AND email = ?", (file_id, email))
         row = cursor.fetchone()

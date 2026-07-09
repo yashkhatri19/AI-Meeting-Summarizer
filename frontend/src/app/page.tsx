@@ -251,7 +251,7 @@ function Dashboard() {
     }
   };
 
-  const handleUpload = async () => {
+   const handleUpload = async () => {
     if (!file) {
       setError("Please select a file first.");
       return;
@@ -264,7 +264,6 @@ function Dashboard() {
     const CHUNK_SIZE = 10 * 1024 * 1024; 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
-    let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
       { sender: "ai", text: `✨ Ask Anything about your Video Content!` }
@@ -275,6 +274,7 @@ function Dashboard() {
     setCurrentFileSize(sizeStr);
 
     try {
+      // Step 1: Upload all individual file blocks cleanly without triggering a compilation step
       for (let currentChunk = 0; currentChunk < totalChunks; currentChunk++) {
         const startByte = currentChunk * CHUNK_SIZE;
         const endByte = Math.min(startByte + CHUNK_SIZE, file.size);
@@ -287,7 +287,6 @@ function Dashboard() {
         formData.append("chunkIndex", currentChunk.toString());
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
-        formData.append("email", userProfile?.email || "anonymous");
 
         setTranscript(`[System Log: Synced portion ${currentChunk + 1} of ${totalChunks}... Analysing stream...]`);
 
@@ -300,19 +299,34 @@ function Dashboard() {
           const textError = await response.text();
           throw new Error(textError || `Server alert on segment ${currentChunk + 1}`);
         }
+      }
 
-        const data = await response.json();
+      // Step 2: Now that all chunks are guaranteed to be saved on disk, execute a unified file assembly
+      setTranscript(`[System Log: All segments verified. Starting server-side file assembly and speech recognition...]`);
+      
+      const assembleResponse = await fetch(`${RENDER_API_URL}/api/assemble-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileId: fileId,
+          totalChunks: totalChunks,
+          fileName: file.name,
+          email: userProfile?.email || "anonymous"
+        })
+      });
 
-        if (data.status === "processing") {
-          setTranscript(`[System Log: Portion ${currentChunk + 1}/${totalChunks} verified. Mapping media streams...]`);
-        } else if (data.status === "completed" || data.transcript) {
-          accumulatedTranscript = data.transcript || "Conversion completed successfully.";
-          setTranscript(accumulatedTranscript);
-          setActiveSessionId(fileId);
-          setFile(null);
-          await fetchUserHistoryFromServer(userProfile?.email || "");
-          break;
-        }
+      if (!assembleResponse.ok) {
+        const assemblyError = await assembleResponse.text();
+        throw new Error(assemblyError || "Assembly processing failed on server backend.");
+      }
+
+      const assemblyData = await assembleResponse.json();
+      
+      if (assemblyData.transcript) {
+        setTranscript(assemblyData.transcript);
+        setActiveSessionId(fileId);
+        setFile(null);
+        await fetchUserHistoryFromServer(userProfile?.email || "");
       }
 
     } catch (err: any) {
