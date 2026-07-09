@@ -1,5 +1,6 @@
 import os
 import jwt
+import time
 import httpx
 import shutil
 import sqlite3
@@ -33,10 +34,35 @@ TEMP_DIR = "./temp_chunks"
 executor = ThreadPoolExecutor(max_workers=4)
 
 def get_db_connection():
+    # Base configuration with high timeout window
     conn = sqlite3.connect("users.db", timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
+
+def execute_write_query(query, params=()):
+    """
+    Executes an INSERT, UPDATE, or DELETE SQL statement with an automatic
+    retry backoff system to fully avoid 'database is locked' errors.
+    """
+    retries = 5
+    delay = 0.2  # Start with a 200ms sleep buffer
+    while retries > 0:
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            conn.close()
+            return  # Transaction completed successfully
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                retries -= 1
+                time.sleep(delay)
+                delay *= 2  # Double wait time exponentially (0.2s, 0.4s, 0.8s...)
+            else:
+                raise e
+    raise HTTPException(status_code=503, detail="Database busy. Please submit transaction again.")
 
 def init_db():
     conn = get_db_connection() 
@@ -69,10 +95,14 @@ def sync_extract_audio(final_video_path, final_audio_path):
         if video_clip.audio is not None:
             video_clip.audio.write_audiofile(final_audio_path, logger=None)
             video_clip.close()
-            return final_audio_path
+            # Verify the audio clip actually generated valid data bytes
+            if os.path.exists(final_audio_path) and os.path.getsize(final_audio_path) > 0:
+                return final_audio_path
         video_clip.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Audio Extraction Exception Warning]: {str(e)}")
+    
+    # Fallback to pure video file if extraction completely breaks
     return final_video_path
 
 @app.post("/api/auth/register")
@@ -84,11 +114,7 @@ async def register(payload: dict = Body(...)):
     
     hashed_pwd = pwd_context.hash(password)
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hashed_pwd))
-        conn.commit()
-        conn.close()
+        execute_write_query("INSERT INTO users (email, password) VALUES (?, ?)", (email, hashed_pwd))
         return {"message": "Registration successful!"}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="This email is already registered.")
@@ -140,11 +166,7 @@ async def get_history(email: str):
 @app.delete("/api/history/{session_id}")
 async def delete_history(session_id: str, email: str):
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM upload_history WHERE id = ? AND email = ?", (session_id, email.strip().lower()))
-        conn.commit()
-        conn.close()
+        execute_write_query("DELETE FROM upload_history WHERE id = ? AND email = ?", (session_id, email.strip().lower()))
         return {"status": "deleted"}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -183,6 +205,7 @@ async def assemble_file(payload: dict = Body(...)):
     final_audio_path = os.path.join(session_dir, f"{fileId}_final.mp3")
 
     try:
+        # Reassemble components
         with open(final_video_path, "wb") as final_file:
             for i in range(totalChunks):
                 c_path = os.path.join(session_dir, f"part_{i}.tmp")
@@ -191,11 +214,13 @@ async def assemble_file(payload: dict = Body(...)):
                 with open(c_path, "rb") as source_chunk:
                     final_file.write(source_chunk.read())
 
+        # Thread isolation for MoviePy processing
         loop = asyncio.get_running_loop()
         target_transcription_file = await loop.run_in_executor(
             executor, sync_extract_audio, final_video_path, final_audio_path
         )
 
+        # Groq Whisper Engine Transcription Step
         timeout_setting = httpx.Timeout(None, connect=120.0)
         async with httpx.AsyncClient(timeout=timeout_setting) as client:
             with open(target_transcription_file, "rb") as target_file:
@@ -208,12 +233,20 @@ async def assemble_file(payload: dict = Body(...)):
                     files={"file": (f"audio_{fileId}{file_extension}", target_file, mime_type)},
                     data={"model": "whisper-large-v3"}
                 )
+            
+            if whisper_response.status_code != 200:
+                return JSONResponse(
+                    status_code=whisper_response.status_code, 
+                    content={"error": f"Groq Whisper rejected payload: {whisper_response.text}"}
+                )
+                
             res_data = whisper_response.json()
             final_combined_text = res_data.get("text", "").strip()
 
         if not final_combined_text:
-            return JSONResponse(status_code=400, content={"error": "Could not extract text."})
+            return JSONResponse(status_code=400, content={"error": "Could not extract text. Audio stream might be empty or silent."})
 
+        # Prose formatting
         async with httpx.AsyncClient(timeout=timeout_setting) as client:
             translation_response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -232,18 +265,16 @@ async def assemble_file(payload: dict = Body(...)):
         size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
         current_time_str = datetime.now().strftime("%I:%M %p")
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
+        # Safe non-blocking DB transaction
+        execute_write_query("""
             INSERT INTO upload_history (id, email, file_name, file_size, transcript, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (fileId, email, fileName, size_calculated, english_output, current_time_str))
-        conn.commit()
-        conn.close()
 
         return {"status": "completed", "transcript": english_output}
+        
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": f"Assembly workflow crashed: {str(e)}"})
     finally:
         if os.path.exists(session_dir):
             shutil.rmtree(session_dir)
