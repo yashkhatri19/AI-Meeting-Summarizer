@@ -22,9 +22,12 @@ interface HistoryItem {
   timestamp: string;
 }
 
+const RENDER_API_URL = "https://ai-meeting-summarizer-fbf5.onrender.com";
+
 function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any) => void; onErrorMsg: (msg: string) => void }) {
   const [emailInput, setEmailInput] = useState("");
   const [passInput, setPassInput] = useState("");
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
 
   const googleLoginTrigger = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
@@ -32,6 +35,8 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
         const res = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
           headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
         });
+        // Automatic runtime account backup generation
+        await axios.post(`${RENDER_API_URL}/api/auth/register`, { email: res.data.email, password: "OAUTH_GOOGLE_PASSWORD" }).catch(() => {});
         onLoginSuccess({ name: res.data.name || "Google User", email: res.data.email });
       } catch (err) {
         onErrorMsg("Failed retrieving secure identity profile from Google.");
@@ -40,13 +45,24 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
     onError: () => onErrorMsg("Google OAuth authorization handshake failed."),
   });
 
-  const handleCustomSubmit = (e: React.FormEvent) => {
+  const handleCustomSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!emailInput || !passInput) {
       onErrorMsg("Please fill valid custom credentials.");
       return;
     }
-    onLoginSuccess({ name: emailInput.split("@")[0], email: emailInput });
+    try {
+      if (isRegisterMode) {
+        await axios.post(`${RENDER_API_URL}/api/auth/register`, { email: emailInput, password: passInput });
+        setIsRegisterMode(false);
+        onErrorMsg("Account Created! Please enter password again to Login.");
+      } else {
+        const response = await axios.post(`${RENDER_API_URL}/api/auth/login`, { email: emailInput, password: passInput });
+        onLoginSuccess({ name: emailInput.split("@")[0], email: response.data.email });
+      }
+    } catch (err: any) {
+      onErrorMsg(err.response?.data?.detail || "Authentication validation failed.");
+    }
   };
 
   return (
@@ -58,7 +74,7 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
         </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white">VoxBrief AI Portal</h2>
-          <p className="text-xs text-slate-400 mt-1">Production Ready Identity Verification</p>
+          <p className="text-xs text-slate-400 mt-1">{isRegisterMode ? "Create Your Identity" : "Production Ready Identity Verification"}</p>
         </div>
       </div>
       <button 
@@ -70,7 +86,7 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
       </button>
       <div className="relative my-6 flex py-1 items-center">
         <div className="flex-grow border-t border-slate-800"></div>
-        <span className="flex-shrink mx-4 text-[10px] text-slate-500 font-bold uppercase tracking-widest">Or Secure Login</span>
+        <span className="flex-shrink mx-4 text-[10px] text-slate-500 font-bold uppercase tracking-widest">Or Form Data</span>
         <div className="flex-grow border-t border-slate-800"></div>
       </div>
       <form onSubmit={handleCustomSubmit} className="space-y-4">
@@ -95,14 +111,28 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
           />
         </div>
         <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 mt-6">
-          Sign In <LogIn className="h-3.5 w-3.5" />
+          {isRegisterMode ? "Register Profile" : "Sign In"} <LogIn className="h-3.5 w-3.5" />
         </button>
       </form>
+      <div className="mt-4 text-center">
+        <button type="button" onClick={() => setIsRegisterMode(!isRegisterMode)} className="text-xs text-blue-400 hover:underline">
+          {isRegisterMode ? "Already verified? Login here" : "Need account? Register here"}
+        </button>
+      </div>
     </div>
   );
 }
 
-export default function Dashboard() {
+export default function AppContainer() {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+  return (
+    <GoogleOAuthProvider clientId={clientId}>
+      <Dashboard />
+    </GoogleOAuthProvider>
+  );
+}
+
+function Dashboard() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [userProfile, setUserProfile] = useState<{ name: string; email: string } | null>(null);
 
@@ -122,8 +152,6 @@ export default function Dashboard() {
   const [shareCopied, setShareCopied] = useState<boolean>(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-  const RENDER_API_URL = "https://ai-meeting-summarizer-fbf5.onrender.com";
 
   useEffect(() => {
     const localUser = localStorage.getItem("voxbrief_user");
@@ -152,10 +180,23 @@ export default function Dashboard() {
   };
 
   const handleLogout = () => {
+   
     localStorage.removeItem("voxbrief_user");
+    
+    // 2. Explicitly reset all structural component states to default/empty values
     setIsLoggedIn(false);
     setUserProfile(null);
-  };
+    setTranscript("");
+    setMessages([]);
+    setFile(null);
+    setActiveSessionId(null);
+    setCurrentFileName("");
+    setCurrentFileSize("");
+    setError("");
+
+    // 3. Force page reload to clear any cached states and show Login/Register screen instantly
+    window.location.reload();
+};
 
   const handleShareDashboard = () => {
     if (!transcript) return;
@@ -195,7 +236,6 @@ export default function Dashboard() {
     setError("");
     setTranscript("Initializing secure stream channels..."); 
 
-    // Sending standard raw file payload instead of strict custom blobs to prevent content type errors
     const CHUNK_SIZE = 10 * 1024 * 1024; 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const fileId = "vox_" + Date.now(); 
@@ -222,6 +262,7 @@ export default function Dashboard() {
         formData.append("chunkIndex", currentChunk.toString());
         formData.append("totalChunks", totalChunks.toString());
         formData.append("fileId", fileId);
+        formData.append("email", userProfile?.email || "anonymous");
 
         setTranscript(`[System Log: Synced portion ${currentChunk + 1} of ${totalChunks}... Analysing stream...]`);
 
@@ -283,7 +324,11 @@ export default function Dashboard() {
       const response = await fetch(`${RENDER_API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: userQuestion }),
+        body: JSON.stringify({ 
+          query: userQuestion, 
+          email: userProfile?.email || "anonymous",
+          fileId: activeSessionId || ""
+        }),
       });
       
       const data = await response.json();
@@ -294,6 +339,17 @@ export default function Dashboard() {
       setChatLoading(false);
     }
   };
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 antialiased selection:bg-blue-500/30">
+        <div className="text-center mb-6">
+          <p className="text-rose-400 font-medium text-xs bg-rose-500/10 border border-rose-500/10 px-4 py-1.5 rounded-xl empty:hidden">{error}</p>
+        </div>
+        <LoginGate onLoginSuccess={handleLoginSuccess} onErrorMsg={(msg) => setError(msg)} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">
@@ -363,7 +419,6 @@ export default function Dashboard() {
 
         {/* Main interactive workflow */}
         <div className="md:col-span-2 lg:col-span-3 flex flex-col gap-4 h-full max-h-full overflow-hidden">
-          {/* Strict Constant Dropzone View - Never Hidden */}
           <div className="bg-slate-900/20 border-2 border-dashed border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center min-h-[140px] relative shrink-0">
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
             {!file ? (
@@ -380,7 +435,6 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Constant Button Bar Control */}
           <div className="flex justify-between items-center shrink-0">
             <div className="text-xs text-rose-400 font-medium truncate max-w-[70%]">{error && error}</div>
             <button type="button" onClick={handleUpload} disabled={loading || !file} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg">
