@@ -28,19 +28,30 @@ JWT_ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security_bearer = HTTPBearer()
 
-USER_TRANSCRIPT_STORAGE = {}
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TEMP_DIR = "./temp_chunks"
-executor = ThreadPoolExecutor(max_workers=4)  # For running heavy video conversion safely
+executor = ThreadPoolExecutor(max_workers=4)
 
 def init_db():
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
+    # User Credentials Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
+        )
+    """)
+    # Secure User-Isolated History Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS upload_history (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_size TEXT NOT NULL,
+            transcript TEXT NOT NULL,
+            timestamp TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -89,7 +100,6 @@ async def login(payload: dict = Body(...)):
     token = jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return {"token": token, "email": email}
 
-# Worker function to safely process MoviePy without freezing the web server loop
 def sync_extract_audio(final_video_path, final_audio_path):
     try:
         video_clip = VideoFileClip(final_video_path)
@@ -101,6 +111,44 @@ def sync_extract_audio(final_video_path, final_audio_path):
     except Exception:
         pass
     return final_video_path
+
+@app.get("/api/history")
+async def get_history(email: str):
+    email_clean = email.strip().lower()
+    try:
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, file_name, file_size, transcript, timestamp 
+            FROM upload_history WHERE email = ? ORDER BY timestamp DESC
+        """, (email_clean,))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                "id": r[0],
+                "fileName": r[1],
+                "fileSize": r[2],
+                "transcript": r[3],
+                "messages": [{"sender": "ai", "text": "✨ Ask Anything about your Video Content!"}],
+                "timestamp": r[4]
+            } for r in rows
+        ]
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.delete("/api/history/{session_id}")
+async def delete_history(session_id: str, email: str):
+    try:
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM upload_history WHERE id = ? AND email = ?", (session_id, email.strip().lower()))
+        conn.commit()
+        conn.close()
+        return {"status": "deleted"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/upload-chunk")
 async def upload_chunk(
@@ -132,7 +180,6 @@ async def upload_chunk(
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": f"Failed stream assembly: {str(e)}"})
 
-        # Offload video audio extraction safely onto worker thread pool
         loop = asyncio.get_running_loop()
         target_transcription_file = await loop.run_in_executor(
             executor, sync_extract_audio, final_video_path, final_audio_path
@@ -172,8 +219,19 @@ async def upload_chunk(
                 )
                 english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
                 
-            USER_TRANSCRIPT_STORAGE[email.lower()] = english_output
-            USER_TRANSCRIPT_STORAGE[fileId] = english_output
+            # Database Save Logic
+            size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
+            current_time_str = datetime.now().strftime("%I:%M %p")
+            
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO upload_history (id, email, file_name, file_size, transcript, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (fileId, email.lower().strip(), file.filename, size_calculated, english_output, current_time_str))
+            conn.commit()
+            conn.close()
+
             return {"status": "completed", "transcript": english_output}
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
@@ -186,10 +244,21 @@ async def upload_chunk(
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
     user_query = payload.get("query", "")
-    email = payload.get("email", "anonymous").lower()
+    email = payload.get("email", "anonymous").lower().strip()
     file_id = payload.get("fileId", "")
     
-    active_context = USER_TRANSCRIPT_STORAGE.get(email) or USER_TRANSCRIPT_STORAGE.get(file_id) or "No contextual lecture transcript found."
+    # Secure Context Parsing inside DB instead of global RAM Dict
+    active_context = "No contextual lecture transcript found."
+    try:
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT transcript FROM upload_history WHERE id = ? AND email = ?", (file_id, email))
+        row = cursor.fetchone()
+        if row:
+            active_context = row[0]
+        conn.close()
+    except Exception:
+        pass
 
     try:
         async with httpx.AsyncClient() as client:

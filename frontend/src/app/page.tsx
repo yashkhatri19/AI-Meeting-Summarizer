@@ -36,14 +36,13 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
           headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
         });
         
-        // Sahi content-type header ke sath google user data save karein
         await axios.post(`${RENDER_API_URL}/api/auth/register`, 
           { email: res.data.email.trim().toLowerCase(), password: "OAUTH_GOOGLE_PASSWORD" },
           { headers: { "Content-Type": "application/json" } }
         ).catch(() => {});
         
-        onErrorMsg(""); // Clear errors on success
-        onLoginSuccess({ name: res.data.name || "Google User", email: res.data.email });
+        onErrorMsg("");
+        onLoginSuccess({ name: res.data.name || "Google User", email: res.data.email.trim().toLowerCase() });
       } catch (err) {
         onErrorMsg("Failed retrieving secure identity profile from Google.");
       }
@@ -64,7 +63,7 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
           { headers: { "Content-Type": "application/json" } }
         );
         setIsRegisterMode(false);
-        onErrorMsg(""); // Clear any prior error banners
+        onErrorMsg("");
         alert("Registration Successful! Ab aap login kar sakte hain.");
       } else {
         const response = await axios.post(`${RENDER_API_URL}/api/auth/login`, 
@@ -72,7 +71,7 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
           { headers: { "Content-Type": "application/json" } }
         );
         onErrorMsg(""); 
-        onLoginSuccess({ name: emailInput.split("@")[0], email: response.data.email });
+        onLoginSuccess({ name: emailInput.split("@")[0], email: response.data.email.trim().toLowerCase() });
       }
     } catch (err: any) {
       onErrorMsg(err.response?.data?.detail || "Authentication validation failed.");
@@ -167,30 +166,39 @@ function Dashboard() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Dynamic User history server synchronization routine
+  const fetchUserHistoryFromServer = async (userEmail: string) => {
+    try {
+      const res = await fetch(`${RENDER_API_URL}/api/history?email=${encodeURIComponent(userEmail)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setHistory(data);
+      }
+    } catch (e) {
+      console.error("Failed pulling isolated secure history lists", e);
+    }
+  };
+
   useEffect(() => {
     const localUser = localStorage.getItem("voxbrief_user");
     if (localUser) {
-      setUserProfile(JSON.parse(localUser));
+      const parsedUser = JSON.parse(localUser);
+      setUserProfile(parsedUser);
       setIsLoggedIn(true);
+      fetchUserHistoryFromServer(parsedUser.email);
     }
-    const savedHistory = localStorage.getItem("voxbrief_history");
-    if (savedHistory) setHistory(JSON.parse(savedHistory));
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, chatLoading]);
 
-  const saveToLocalStorage = (updatedHistory: HistoryItem[]) => {
-    setHistory(updatedHistory);
-    localStorage.setItem("voxbrief_history", JSON.stringify(updatedHistory));
-  };
-
   const handleLoginSuccess = (profile: { name: string; email: string }) => {
     localStorage.setItem("voxbrief_user", JSON.stringify(profile));
     setUserProfile(profile);
     setIsLoggedIn(true);
     setError("");
+    fetchUserHistoryFromServer(profile.email);
   };
 
   const handleLogout = () => {
@@ -200,11 +208,11 @@ function Dashboard() {
     setTranscript("");
     setMessages([]);
     setFile(null);
+    setHistory([]);
     setActiveSessionId(null);
     setCurrentFileName("");
     setCurrentFileSize("");
     setError("");
-    window.location.reload();
   };
 
   const handleShareDashboard = () => {
@@ -215,16 +223,24 @@ function Dashboard() {
     setTimeout(() => setShareCopied(false), 2500);
   };
 
-  const deleteSession = (id: string, e: React.MouseEvent) => {
+  const deleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const filteredHistory = history.filter(item => item.id !== id);
-    saveToLocalStorage(filteredHistory);
-    if (activeSessionId === id) {
-      setActiveSessionId(null);
-      setTranscript("");
-      setMessages([]);
-      setCurrentFileName("");
-      setCurrentFileSize("");
+    if (!userProfile) return;
+    
+    try {
+      await fetch(`${RENDER_API_URL}/api/history/${id}?email=${encodeURIComponent(userProfile.email)}`, {
+        method: "DELETE"
+      });
+      setHistory(prev => prev.filter(item => item.id !== id));
+      if (activeSessionId === id) {
+        setActiveSessionId(null);
+        setTranscript("");
+        setMessages([]);
+        setCurrentFileName("");
+        setCurrentFileSize("");
+      }
+    } catch (err) {
+      console.error("Failed clearing item", err);
     }
   };
 
@@ -251,7 +267,7 @@ function Dashboard() {
     let accumulatedTranscript = "";
 
     const initialMessages: Message[] = [
-      { sender: "ai", text: `✨ Ask Anythink about your Video Content!` }
+      { sender: "ai", text: `✨ Ask Anything about your Video Content!` }
     ];
     setMessages(initialMessages);
     setCurrentFileName(file.name);
@@ -292,20 +308,9 @@ function Dashboard() {
         } else if (data.status === "completed" || data.transcript) {
           accumulatedTranscript = data.transcript || "Conversion completed successfully.";
           setTranscript(accumulatedTranscript);
-
-          const newSession: HistoryItem = {
-            id: Date.now().toString(),
-            fileName: file.name,
-            fileSize: sizeStr,
-            transcript: accumulatedTranscript,
-            messages: initialMessages,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          };
-
-          const updatedHistory = [newSession, ...history];
-          saveToLocalStorage(updatedHistory);
-          setActiveSessionId(newSession.id);
+          setActiveSessionId(fileId);
           setFile(null);
+          await fetchUserHistoryFromServer(userProfile?.email || "");
           break;
         }
       }
