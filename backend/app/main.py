@@ -34,19 +34,19 @@ TEMP_DIR = "./temp_chunks"
 executor = ThreadPoolExecutor(max_workers=4)
 
 def get_db_connection():
-    # Base configuration with high timeout window
     conn = sqlite3.connect("users.db", timeout=30.0)
+    # Enforce database configurations every time a connection opens
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 def execute_write_query(query, params=()):
     """
-    Executes an INSERT, UPDATE, or DELETE SQL statement with an automatic
-    retry backoff system to fully avoid 'database is locked' errors.
+    Executes structural SQL statements with an improved recursive retry 
+    backoff pattern to entirely prevent "database is locked" crashes.
     """
-    retries = 5
-    delay = 0.2  # Start with a 200ms sleep buffer
+    retries = 10
+    delay = 0.1
     while retries > 0:
         try:
             conn = get_db_connection()
@@ -54,12 +54,12 @@ def execute_write_query(query, params=()):
             cursor.execute(query, params)
             conn.commit()
             conn.close()
-            return  # Transaction completed successfully
+            return 
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
                 retries -= 1
                 time.sleep(delay)
-                delay *= 2  # Double wait time exponentially (0.2s, 0.4s, 0.8s...)
+                delay *= 1.5
             else:
                 raise e
     raise HTTPException(status_code=503, detail="Database busy. Please submit transaction again.")
@@ -95,14 +95,13 @@ def sync_extract_audio(final_video_path, final_audio_path):
         if video_clip.audio is not None:
             video_clip.audio.write_audiofile(final_audio_path, logger=None)
             video_clip.close()
-            # Verify the audio clip actually generated valid data bytes
             if os.path.exists(final_audio_path) and os.path.getsize(final_audio_path) > 0:
                 return final_audio_path
-        video_clip.close()
+        if video_clip:
+            video_clip.close()
     except Exception as e:
         print(f"[Audio Extraction Exception Warning]: {str(e)}")
     
-    # Fallback to pure video file if extraction completely breaks
     return final_video_path
 
 @app.post("/api/auth/register")
@@ -205,7 +204,7 @@ async def assemble_file(payload: dict = Body(...)):
     final_audio_path = os.path.join(session_dir, f"{fileId}_final.mp3")
 
     try:
-        # Reassemble components
+        # Reassemble components sequentially
         with open(final_video_path, "wb") as final_file:
             for i in range(totalChunks):
                 c_path = os.path.join(session_dir, f"part_{i}.tmp")
@@ -221,7 +220,7 @@ async def assemble_file(payload: dict = Body(...)):
         )
 
         # Groq Whisper Engine Transcription Step
-        timeout_setting = httpx.Timeout(None, connect=120.0)
+        timeout_setting = httpx.Timeout(None, connect=120.0, read=120.0)
         async with httpx.AsyncClient(timeout=timeout_setting) as client:
             with open(target_transcription_file, "rb") as target_file:
                 file_extension = os.path.splitext(target_transcription_file)[1]
@@ -243,10 +242,10 @@ async def assemble_file(payload: dict = Body(...)):
             res_data = whisper_response.json()
             final_combined_text = res_data.get("text", "").strip()
 
-        if not final_combined_text:
+        if not final_combined_text or len(final_combined_text) < 3:
             return JSONResponse(status_code=400, content={"error": "Could not extract text. Audio stream might be empty or silent."})
 
-        # Prose formatting
+        # Prose formatting clean up
         async with httpx.AsyncClient(timeout=timeout_setting) as client:
             translation_response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -254,13 +253,17 @@ async def assemble_file(payload: dict = Body(...)):
                 json={
                     "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": "CRITICAL: You are an expert academic translator. Combine transcript pieces into clean cohesive English prose only. Never use any language other than English."},
+                        {"role": "system", "content": "You are a professional assistant. Clean up this speech transcript text into readable, cohesive paragraphs. Keep the output strictly in English. Do not add any meta-commentary like 'Here is the transcript' or conversational replies. Output ONLY the polished text."},
                         {"role": "user", "content": final_combined_text}
                     ],
                     "temperature": 0.2
                 }
             )
-            english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
+            
+            if translation_response.status_code != 200:
+                english_output = final_combined_text
+            else:
+                english_output = translation_response.json()["choices"][0]["message"]["content"].strip()
             
         size_calculated = f"{(os.path.getsize(final_video_path)/(1024*1024)):.2f} MB"
         current_time_str = datetime.now().strftime("%I:%M %p")
@@ -271,13 +274,14 @@ async def assemble_file(payload: dict = Body(...)):
             VALUES (?, ?, ?, ?, ?, ?)
         """, (fileId, email, fileName, size_calculated, english_output, current_time_str))
 
+        # Safely clear temp storage only after successful completion
+        if os.path.exists(session_dir):
+            shutil.rmtree(session_dir)
+
         return {"status": "completed", "transcript": english_output}
         
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Assembly workflow crashed: {str(e)}"})
-    finally:
-        if os.path.exists(session_dir):
-            shutil.rmtree(session_dir)
 
 @app.post("/api/chat")
 async def chat_agent(payload: dict = Body(...)):
