@@ -21,3 +21,5 @@ tzdata==2026.2
 moviepy
 uvicorn==0.30.0
 PyJWT==2.10.1
+passlib==1.7.4
+bcrypt==4.2.0
