@@ -3,6 +3,8 @@ import jwt
 import httpx
 import shutil
 import sqlite3
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from fastapi import FastAPI, UploadFile, File, Form, Body, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +31,7 @@ security_bearer = HTTPBearer()
 USER_TRANSCRIPT_STORAGE = {}
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 TEMP_DIR = "./temp_chunks"
+executor = ThreadPoolExecutor(max_workers=4)  # For running heavy video conversion safely
 
 def init_db():
     conn = sqlite3.connect("users.db")
@@ -86,6 +89,19 @@ async def login(payload: dict = Body(...)):
     token = jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return {"token": token, "email": email}
 
+# Worker function to safely process MoviePy without freezing the web server loop
+def sync_extract_audio(final_video_path, final_audio_path):
+    try:
+        video_clip = VideoFileClip(final_video_path)
+        if video_clip.audio is not None:
+            video_clip.audio.write_audiofile(final_audio_path, logger=None)
+            video_clip.close()
+            return final_audio_path
+        video_clip.close()
+    except Exception:
+        pass
+    return final_video_path
+
 @app.post("/api/upload-chunk")
 async def upload_chunk(
     file: UploadFile = File(...),
@@ -116,17 +132,11 @@ async def upload_chunk(
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": f"Failed stream assembly: {str(e)}"})
 
-        try:
-            video_clip = VideoFileClip(final_video_path)
-            if video_clip.audio is not None:
-                video_clip.audio.write_audiofile(final_audio_path, logger=None)
-                video_clip.close()
-                target_transcription_file = final_audio_path
-            else:
-                video_clip.close()
-                target_transcription_file = final_video_path
-        except Exception:
-            target_transcription_file = final_video_path
+        # Offload video audio extraction safely onto worker thread pool
+        loop = asyncio.get_running_loop()
+        target_transcription_file = await loop.run_in_executor(
+            executor, sync_extract_audio, final_video_path, final_audio_path
+        )
 
         try:
             timeout_setting = httpx.Timeout(None, connect=120.0)
@@ -154,7 +164,7 @@ async def upload_chunk(
                     json={
                         "model": "llama-3.1-8b-instant",
                         "messages": [
-                            {"role": "system", "content": "CRITICAL: You are an expert academic translator. Combine transcript pieces into clean cohesive English prose."},
+                            {"role": "system", "content": "CRITICAL: You are an expert academic translator. Combine transcript pieces into clean cohesive English prose only. Never use any language other than English."},
                             {"role": "user", "content": final_combined_text}
                         ],
                         "temperature": 0.2
@@ -189,7 +199,7 @@ async def chat_agent(payload: dict = Body(...)):
                 json={
                     "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": f"Answer concisely in English based exactly on this:\n\n{active_context}"},
+                        {"role": "system", "content": f"Answer concisely, naturally, and exclusively in English based exactly on this context:\n\n{active_context}"},
                         {"role": "user", "content": user_query}
                     ],
                     "temperature": 0.3

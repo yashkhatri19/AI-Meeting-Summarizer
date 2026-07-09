@@ -35,8 +35,14 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
         const res = await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
           headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
         });
-        // Automatic runtime account backup generation
-        await axios.post(`${RENDER_API_URL}/api/auth/register`, { email: res.data.email, password: "OAUTH_GOOGLE_PASSWORD" }).catch(() => {});
+        
+        // Sahi content-type header ke sath google user data save karein
+        await axios.post(`${RENDER_API_URL}/api/auth/register`, 
+          { email: res.data.email.trim().toLowerCase(), password: "OAUTH_GOOGLE_PASSWORD" },
+          { headers: { "Content-Type": "application/json" } }
+        ).catch(() => {});
+        
+        onErrorMsg(""); // Clear errors on success
         onLoginSuccess({ name: res.data.name || "Google User", email: res.data.email });
       } catch (err) {
         onErrorMsg("Failed retrieving secure identity profile from Google.");
@@ -53,11 +59,19 @@ function LoginGate({ onLoginSuccess, onErrorMsg }: { onLoginSuccess: (user: any)
     }
     try {
       if (isRegisterMode) {
-        await axios.post(`${RENDER_API_URL}/api/auth/register`, { email: emailInput, password: passInput });
+        await axios.post(`${RENDER_API_URL}/api/auth/register`, 
+          { email: emailInput.trim().toLowerCase(), password: passInput },
+          { headers: { "Content-Type": "application/json" } }
+        );
         setIsRegisterMode(false);
-        onErrorMsg("Account Created! Please enter password again to Login.");
+        onErrorMsg(""); // Clear any prior error banners
+        alert("Registration Successful! Ab aap login kar sakte hain.");
       } else {
-        const response = await axios.post(`${RENDER_API_URL}/api/auth/login`, { email: emailInput, password: passInput });
+        const response = await axios.post(`${RENDER_API_URL}/api/auth/login`, 
+          { email: emailInput.trim().toLowerCase(), password: passInput },
+          { headers: { "Content-Type": "application/json" } }
+        );
+        onErrorMsg(""); 
         onLoginSuccess({ name: emailInput.split("@")[0], email: response.data.email });
       }
     } catch (err: any) {
@@ -180,10 +194,7 @@ function Dashboard() {
   };
 
   const handleLogout = () => {
-   
     localStorage.removeItem("voxbrief_user");
-    
-    // 2. Explicitly reset all structural component states to default/empty values
     setIsLoggedIn(false);
     setUserProfile(null);
     setTranscript("");
@@ -193,10 +204,8 @@ function Dashboard() {
     setCurrentFileName("");
     setCurrentFileSize("");
     setError("");
-
-    // 3. Force page reload to clear any cached states and show Login/Register screen instantly
     window.location.reload();
-};
+  };
 
   const handleShareDashboard = () => {
     if (!transcript) return;
@@ -385,7 +394,6 @@ function Dashboard() {
       </header>
 
       <main className="flex-1 grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 p-4 gap-4 max-h-[calc(100vh-70px)] h-[calc(100vh-70px)] overflow-hidden w-full">
-        {/* Sidebar logs */}
         <div className="md:col-span-1 bg-slate-900/10 border border-slate-800/60 rounded-2xl flex flex-col p-4 h-full min-h-0 overflow-hidden">
           <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-3 border-b border-slate-800/60 pb-2">
             <History className="h-3.5 w-3.5" /> ARCHIVE LOGS
@@ -417,7 +425,6 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Main interactive workflow */}
         <div className="md:col-span-2 lg:col-span-3 flex flex-col gap-4 h-full max-h-full overflow-hidden">
           <div className="bg-slate-900/20 border-2 border-dashed border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center min-h-[140px] relative shrink-0">
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
@@ -456,7 +463,6 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Chat Interface */}
         <div className="md:col-span-1 lg:col-span-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl flex flex-col h-full max-h-full overflow-hidden shadow-xl">
           <div className="p-3 border-b border-slate-800/60 bg-slate-900/20 shrink-0 flex items-center gap-2">
             <Bot className="h-3.5 w-3.5 text-blue-400" />
